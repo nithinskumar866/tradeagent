@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/market.db
+data/market.db-*
+logs/
+reports/
+.streamlit/secrets.toml
+*.bak
