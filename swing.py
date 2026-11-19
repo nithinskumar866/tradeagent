@@ -16,6 +16,7 @@ from swing_agent import DISCLAIMER  # noqa: E402
 from swing_agent.config import ConfigError, load_config  # noqa: E402
 from swing_agent.db import DatabaseError  # noqa: E402
 from swing_agent.logging_setup import setup_logging  # noqa: E402
+from swing_agent.pipeline import NoDataError  # noqa: E402
 from swing_agent.watchlist import WatchlistError  # noqa: E402
 
 log = logging.getLogger("swing")
@@ -97,6 +98,24 @@ def cmd_watchlist(args, cfg) -> int:
     return 0
 
 
+def cmd_scan(args, cfg) -> int:
+    from datetime import date
+
+    from swing_agent import db
+    from swing_agent.pipeline import run_scan
+    from swing_agent.report import format_scan
+
+    conn = db.connect()
+    try:
+        asof = date.fromisoformat(args.date) if args.date else None
+    except ValueError:
+        print(f"Error: --date must look like 2024-03-15 (got {args.date!r}).", file=sys.stderr)
+        return 1
+    result, prev = run_scan(conn, cfg, asof=asof)
+    print(format_scan(result, cfg, prev_regime=prev, today=date.today()))
+    return 0
+
+
 def _not_yet(milestone: int):
     def _cmd(args, cfg) -> int:
         print(f"`{args.command}` is not built yet (planned for milestone {milestone}).")
@@ -125,8 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--refresh", action="store_true", help="Download latest Nifty 100 list from niftyindices.com")
     s.set_defaults(func=cmd_watchlist)
 
+    s = sub.add_parser("scan", help="Regime + signals, print report")
+    s.add_argument("--date", help="Scan as of this past date (YYYY-MM-DD); default latest")
+    s.set_defaults(func=cmd_scan)
+
     for name, ms, helptext in [
-        ("scan", 2, "Regime + signals + exits, print report"),
         ("run", 3, "update + scan + save report"),
         ("trade", 3, "Log a buy or sell"),
         ("backtest", 4, "Run the backtester"),
@@ -139,12 +161,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # ₹ and emoji on Windows consoles
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
     setup_logging(console_level=logging.INFO if args.verbose else logging.ERROR)
     try:
         cfg = load_config(args.config)
         return args.func(args, cfg)
-    except (ConfigError, WatchlistError, DatabaseError) as err:
+    except (ConfigError, WatchlistError, DatabaseError, NoDataError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

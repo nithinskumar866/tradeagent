@@ -42,6 +42,10 @@ entry:
   rsi_dip_lookback: 5
   buy_zone_top_buffer_pct: 0.5
   avoid_results_within_days: 5   # trading days
+  pullback_low_lookback: 5       # pullback depth uses the lowest low of the last N bars
+  rs_lookback: 63                # relative strength vs Nifty, in bars
+  volume_avg_days: 20            # average volume window for bonus scoring
+  volume_dryup_days: 4           # "volume dried up" window before day T
 
 stops_targets:
   swing_low_lookback: 5

@@ -79,6 +79,10 @@ class EntryCfg(_Section):
     rsi_dip_lookback: int = Field(ge=1)
     buy_zone_top_buffer_pct: float = Field(ge=0)
     avoid_results_within_days: int = Field(ge=0)
+    pullback_low_lookback: int = Field(default=5, ge=1)
+    rs_lookback: int = Field(default=63, ge=1)
+    volume_avg_days: int = Field(default=20, ge=2)
+    volume_dryup_days: int = Field(default=4, ge=1)
 
     @model_validator(mode="after")
     def _ranges(self) -> "EntryCfg":
