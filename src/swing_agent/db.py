@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
@@ -15,7 +16,8 @@ from .config import PROJECT_ROOT
 
 log = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH: Path = PROJECT_ROOT / "data" / "market.db"
+# Override with the SWING_AGENT_DB environment variable (e.g. to experiment on a copy).
+DEFAULT_DB_PATH: Path = Path(os.environ.get("SWING_AGENT_DB") or PROJECT_ROOT / "data" / "market.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS symbols (
@@ -95,9 +97,25 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         raise
 
 
+# Columns added on top of the spec schema (kept as additive migrations):
+#   trades.stop_initial: the stop at entry, so R stays fixed after the stop is moved
+#   signals.status / status_note: TAKE or WATCH and why
+#   runs.regime: lets the next run detect a regime change
+MIGRATIONS = [
+    ("trades", "stop_initial", "REAL"),
+    ("signals", "status", "TEXT"),
+    ("signals", "status_note", "TEXT"),
+    ("runs", "regime", "TEXT"),
+]
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables and indexes if they don't exist."""
+    """Create all tables and indexes if they don't exist, then apply additive migrations."""
     conn.executescript(SCHEMA)
+    for table, col, typ in MIGRATIONS:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     conn.commit()
 
 
@@ -208,3 +226,108 @@ def price_summary(conn: sqlite3.Connection) -> pd.DataFrame:
         "FROM prices GROUP BY symbol ORDER BY symbol",
         conn,
     )
+
+
+# ---------------------------------------------------------------- trades
+
+def insert_trade(
+    conn: sqlite3.Connection,
+    symbol: str,
+    side: str,
+    trade_date: date | str,
+    price: float,
+    qty: int,
+    fees: float,
+    stop: float | None = None,
+    target: float | None = None,
+    signal_id: int | None = None,
+    note: str | None = None,
+) -> int:
+    """Insert one BUY/SELL row and return its id. For BUYs, ``stop_initial`` = ``stop``."""
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO trades(symbol, side, date, price, qty, stop, target, fees, signal_id, note, stop_initial) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (symbol, side, str(trade_date), price, qty, stop, target, fees, signal_id, note,
+             stop if side == "BUY" else None),
+        )
+    return int(cur.lastrowid)
+
+
+def get_trades(conn: sqlite3.Connection) -> pd.DataFrame:
+    """All trades in entry order (date, then id)."""
+    return pd.read_sql_query("SELECT * FROM trades ORDER BY date, id", conn)
+
+
+def delete_trade(conn: sqlite3.Connection, trade_id: int) -> bool:
+    """Delete a trade row (to fix a mistake). Returns True if a row was deleted."""
+    with transaction(conn):
+        cur = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+    return cur.rowcount > 0
+
+
+def update_stop(conn: sqlite3.Connection, trade_ids: list[int], new_stop: float) -> None:
+    """Set the current stop on the given BUY rows (``stop_initial`` is left unchanged)."""
+    with transaction(conn):
+        conn.executemany("UPDATE trades SET stop = ? WHERE id = ? AND side = 'BUY'",
+                         [(new_stop, i) for i in trade_ids])
+
+
+# ---------------------------------------------------------------- runs, signals, alerts
+
+def latest_signal(conn: sqlite3.Connection, symbol: str) -> sqlite3.Row | None:
+    """Most recent stored signal for a symbol."""
+    return conn.execute(
+        "SELECT * FROM signals WHERE symbol = ? ORDER BY run_date DESC, id DESC LIMIT 1", (symbol,)
+    ).fetchone()
+
+
+def previous_run_regime(conn: sqlite3.Connection, before: str) -> str | None:
+    """Regime recorded by the latest successful run strictly before ``before`` (YYYY-MM-DD)."""
+    row = conn.execute(
+        "SELECT regime FROM runs WHERE run_date < ? AND regime IS NOT NULL AND status = 'OK' "
+        "ORDER BY run_date DESC LIMIT 1", (before,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def start_run(conn: sqlite3.Connection, run_date: str, started_at: str) -> None:
+    """Create or reset the runs row for ``run_date``."""
+    with transaction(conn):
+        conn.execute(
+            "INSERT INTO runs(run_date, started_at, status) VALUES (?, ?, 'RUNNING') "
+            "ON CONFLICT(run_date) DO UPDATE SET started_at=excluded.started_at, status='RUNNING', "
+            "finished_at=NULL, notes=NULL",
+            (run_date, started_at),
+        )
+
+
+def finish_run(conn: sqlite3.Connection, run_date: str, finished_at: str, status: str,
+               data_last_date: str | None, regime: str | None, notes: str | None) -> None:
+    """Record the outcome of a run."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE runs SET finished_at=?, status=?, data_last_date=?, regime=?, notes=? WHERE run_date=?",
+            (finished_at, status, data_last_date, regime, notes, run_date),
+        )
+
+
+def replace_run_outputs(conn: sqlite3.Connection, run_date: str,
+                        signals: list[dict], alerts: list[dict]) -> list[int]:
+    """Idempotently replace the signals and alerts of ``run_date``. Returns new signal ids."""
+    ids: list[int] = []
+    with transaction(conn):
+        conn.execute("DELETE FROM signals WHERE run_date = ?", (run_date,))
+        conn.execute("DELETE FROM alerts WHERE run_date = ?", (run_date,))
+        for s in signals:
+            cols = ["run_date", *s.keys()]
+            cur = conn.execute(
+                f"INSERT INTO signals({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                [run_date, *s.values()],
+            )
+            ids.append(int(cur.lastrowid))
+        conn.executemany(
+            "INSERT INTO alerts(run_date, symbol, type, message, suggested_action) VALUES (?, ?, ?, ?, ?)",
+            [(run_date, a["symbol"], a["type"], a["message"], a["suggested_action"]) for a in alerts],
+        )
+    return ids

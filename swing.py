@@ -17,6 +17,8 @@ from swing_agent.config import ConfigError, load_config  # noqa: E402
 from swing_agent.db import DatabaseError  # noqa: E402
 from swing_agent.logging_setup import setup_logging  # noqa: E402
 from swing_agent.pipeline import NoDataError  # noqa: E402
+from swing_agent.portfolio import PortfolioError  # noqa: E402
+from swing_agent.trading import TradeError  # noqa: E402
 from swing_agent.watchlist import WatchlistError  # noqa: E402
 
 log = logging.getLogger("swing")
@@ -98,21 +100,82 @@ def cmd_watchlist(args, cfg) -> int:
     return 0
 
 
-def cmd_scan(args, cfg) -> int:
+def _parse_date(text: str | None, flag: str = "--date"):
     from datetime import date
 
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        raise SystemExit(f"Error: {flag} must look like 2024-03-15 (got {text!r}).")
+
+
+def cmd_scan(args, cfg) -> int:
     from swing_agent import db
-    from swing_agent.pipeline import run_scan
-    from swing_agent.report import format_scan
+    from swing_agent.pipeline import daily
+    from swing_agent.report import format_daily
 
     conn = db.connect()
-    try:
-        asof = date.fromisoformat(args.date) if args.date else None
-    except ValueError:
-        print(f"Error: --date must look like 2024-03-15 (got {args.date!r}).", file=sys.stderr)
-        return 1
-    result, prev = run_scan(conn, cfg, asof=asof)
-    print(format_scan(result, cfg, prev_regime=prev, today=date.today()))
+    result = daily(conn, cfg, do_update=False, persist=False, asof=_parse_date(args.date))
+    print(format_daily(result, cfg))
+    return 0
+
+
+def cmd_run(args, cfg) -> int:
+    from swing_agent import db
+    from swing_agent.pipeline import daily
+    from swing_agent.report import format_daily
+
+    conn = db.connect()
+    result = daily(conn, cfg, do_update=not args.no_update, persist=True)
+    print(format_daily(result, cfg))
+    print(f"\nReport saved to {result.report_path}")
+    return 1 if result.update and result.update.offline else 0
+
+
+def cmd_trade(args, cfg) -> int:
+    from swing_agent import db
+    from swing_agent.fmt import inr
+    from swing_agent.portfolio import build_portfolio
+    from swing_agent.trading import log_buy, log_sell, move_stop
+
+    conn = db.connect()
+    if args.action == "buy":
+        res = log_buy(conn, cfg, args.symbol, args.price, args.qty, _parse_date(args.date),
+                      stop=args.stop, target=args.target, fees=args.fees, note=args.note)
+        print(f"Logged BUY #{res.trade_id}: {args.qty} {args.symbol.upper()} @ {inr(args.price)}")
+    elif args.action == "sell":
+        res = log_sell(conn, cfg, args.symbol, args.price, args.qty, _parse_date(args.date),
+                       fees=args.fees, note=args.note)
+        print(f"Logged SELL #{res.trade_id}: {args.qty} {args.symbol.upper()} @ {inr(args.price)}")
+    elif args.action == "move-stop":
+        for m in move_stop(conn, cfg, args.symbol, args.stop):
+            print(m)
+        return 0
+    elif args.action == "delete":
+        ok = db.delete_trade(conn, args.trade_id)
+        print(f"Deleted trade #{args.trade_id}." if ok else f"No trade #{args.trade_id}.")
+        return 0 if ok else 1
+    else:  # list
+        trades = db.get_trades(conn)
+        pf = build_portfolio(trades, cfg.account.capital)
+        cols = ["id", "date", "symbol", "side", "qty", "price", "stop", "target", "fees", "signal_id"]
+        if trades.empty:
+            print("No trades logged yet.")
+        else:
+            view = trades[cols].copy()
+            for c in ("price", "stop", "target", "fees"):
+                view[c] = view[c].map(lambda x: "" if x != x else f"{x:,.2f}")
+            view["signal_id"] = view["signal_id"].map(lambda x: "" if x != x else int(x))
+            print(view.to_string(index=False))
+        print(f"\nOpen positions: {len(pf.positions)}   Capital {inr(pf.capital, 0)}   "
+              f"Cash {inr(pf.available_cash, 0)}   Realised P&L {inr(pf.realised_pnl, 0)}")
+        for p in pf.positions.values():
+            print(f"  {p.symbol}: {p.qty} @ {inr(p.avg_entry)}  stop {inr(p.stop)}  target {inr(p.target)}")
+        return 0
+    for m in res.messages:
+        print("  " + m)
     return 0
 
 
@@ -144,13 +207,36 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--refresh", action="store_true", help="Download latest Nifty 100 list from niftyindices.com")
     s.set_defaults(func=cmd_watchlist)
 
-    s = sub.add_parser("scan", help="Regime + signals, print report")
+    s = sub.add_parser("scan", help="Regime + signals + exits, print report (no download, no save)")
     s.add_argument("--date", help="Scan as of this past date (YYYY-MM-DD); default latest")
     s.set_defaults(func=cmd_scan)
 
+    s = sub.add_parser("run", help="update + scan + save report (used by the scheduler)")
+    s.add_argument("--no-update", action="store_true", help="Skip the download step")
+    s.set_defaults(func=cmd_run)
+
+    t = sub.add_parser("trade", help="Log your own trades (no broker connection)")
+    tsub = t.add_subparsers(dest="action", required=True)
+    for side in ("buy", "sell"):
+        s = tsub.add_parser(side, help=f"Log a {side}")
+        s.add_argument("symbol")
+        s.add_argument("--price", type=float, required=True)
+        s.add_argument("--qty", type=int, required=True)
+        s.add_argument("--date", help="Trade date YYYY-MM-DD (default today)")
+        s.add_argument("--fees", type=float, help="Actual charges (default: estimated)")
+        s.add_argument("--note")
+        if side == "buy":
+            s.add_argument("--stop", type=float, help="Stop-loss (default: from latest signal)")
+            s.add_argument("--target", type=float, help="Target (default: target_r × R from your fill)")
+    s = tsub.add_parser("move-stop", help="Change the stop of an open position")
+    s.add_argument("symbol")
+    s.add_argument("--stop", type=float, required=True)
+    s = tsub.add_parser("delete", help="Delete a mistaken trade row")
+    s.add_argument("trade_id", type=int)
+    tsub.add_parser("list", help="Show trades and open positions")
+    t.set_defaults(func=cmd_trade)
+
     for name, ms, helptext in [
-        ("run", 3, "update + scan + save report"),
-        ("trade", 3, "Log a buy or sell"),
         ("backtest", 4, "Run the backtester"),
         ("dashboard", 5, "Launch the Streamlit dashboard"),
         ("events", 6, "Manage the event calendar"),
@@ -169,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
         return args.func(args, cfg)
-    except (ConfigError, WatchlistError, DatabaseError, NoDataError) as err:
+    except (ConfigError, WatchlistError, DatabaseError, NoDataError, TradeError, PortfolioError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

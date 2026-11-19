@@ -153,6 +153,7 @@ class Signal:
     qty: int | None = None
     risk_amount: float | None = None
     est_costs: float | None = None
+    signal_id: int | None = None   # set once stored in the signals table
 
     @property
     def entry_plan(self) -> float:
