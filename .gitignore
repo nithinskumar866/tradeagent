@@ -8,3 +8,4 @@ logs/
 reports/
 .streamlit/secrets.toml
 *.bak
+.playwright-mcp/

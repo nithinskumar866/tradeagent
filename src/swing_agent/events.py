@@ -72,3 +72,59 @@ def check_results(dates: list[date] | None, asof: date) -> ResultsCheck:
         if d >= asof:
             return ResultsCheck(d, max(0, int(np.busday_count(asof, d))))
     return ResultsCheck(None, None)
+
+
+# ---------------------------------------------------------------- editing
+
+class EventError(Exception):
+    """Raised for an invalid event entry."""
+
+
+def _clean_event(d, symbol: str, etype: str) -> tuple[str, str, str]:
+    try:
+        day = pd.Timestamp(d).date().isoformat()
+    except Exception:
+        raise EventError(f"Bad event date {d!r}; use YYYY-MM-DD.") from None
+    sym = str(symbol).strip().upper() or "ALL"
+    t = str(etype).strip().upper()
+    if t not in EVENT_TYPES:
+        raise EventError(f"Event type must be one of {', '.join(EVENT_TYPES)} (got {etype!r}).")
+    return day, sym, t
+
+
+def add_event(conn: sqlite3.Connection, d, symbol: str, etype: str, note: str = "",
+              source: str = "manual") -> int | None:
+    """Add one event; returns its id, or None if the same (date, symbol, type) already exists."""
+    day, sym, t = _clean_event(d, symbol, etype)
+    exists = conn.execute("SELECT id FROM events WHERE date=? AND symbol=? AND type=?", (day, sym, t)).fetchone()
+    if exists:
+        return None
+    cur = conn.execute("INSERT INTO events(date, symbol, type, note, source) VALUES (?, ?, ?, ?, ?)",
+                       (day, sym, t, note or "", source))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def delete_event(conn: sqlite3.Connection, event_id: int) -> bool:
+    """Delete an event by id."""
+    cur = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def import_events(conn: sqlite3.Connection, df: pd.DataFrame, source: str = "manual") -> tuple[int, list[str]]:
+    """Import rows with columns date,symbol,type[,note]. Returns (added, problems)."""
+    df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    missing = [c for c in ("date", "symbol", "type") if c not in df.columns]
+    if missing:
+        raise EventError(f"Events CSV is missing columns: {missing}. Expected date,symbol,type,note.")
+    added, problems = 0, []
+    for i, r in enumerate(df.itertuples(index=False), start=2):
+        try:
+            note = getattr(r, "note", "")
+            note = "" if note is None or (isinstance(note, float) and pd.isna(note)) else str(note)
+            if add_event(conn, r.date, r.symbol, r.type, note, source) is not None:
+                added += 1
+        except EventError as err:
+            problems.append(f"row {i}: {err}")
+    return added, problems

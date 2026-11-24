@@ -61,7 +61,7 @@ class DatabaseError(Exception):
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     """Open a connection (creating the folder if needed) and ensure the schema exists."""
-    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+    path = Path(db_path) if db_path else Path(os.environ.get("SWING_AGENT_DB") or DEFAULT_DB_PATH)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
     try:

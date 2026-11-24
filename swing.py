@@ -224,6 +224,18 @@ def cmd_backtest(args, cfg) -> int:
     return 0
 
 
+def cmd_dashboard(args, cfg) -> int:
+    import subprocess
+
+    app = Path(__file__).resolve().parent / "app.py"
+    print(f"Opening the dashboard at http://localhost:{args.port}  (Ctrl+C to stop)")
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
+           "--browser.gatherUsageStats", "false"]
+    if args.headless:
+        cmd += ["--server.headless", "true"]
+    return subprocess.call(cmd)
+
+
 def _not_yet(milestone: int):
     def _cmd(args, cfg) -> int:
         print(f"`{args.command}` is not built yet (planned for milestone {milestone}).")
@@ -288,8 +300,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Parameter grid, e.g. --sweep target_r=1.5,2,2.5 rsi_dip_max=45,50,55")
     s.set_defaults(func=cmd_backtest)
 
+    s = sub.add_parser("dashboard", help="Launch the Streamlit dashboard")
+    s.add_argument("--port", type=int, default=8501)
+    s.add_argument("--headless", action="store_true", help="Don't open a browser window")
+    s.set_defaults(func=cmd_dashboard)
+
     for name, ms, helptext in [
-        ("dashboard", 5, "Launch the Streamlit dashboard"),
         ("events", 6, "Manage the event calendar"),
     ]:
         s = sub.add_parser(name, help=f"{helptext} (milestone {ms})")
