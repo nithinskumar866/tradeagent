@@ -65,6 +65,15 @@ python swing.py update
 
 If the download from niftyindices.com fails, the existing list is kept and the command prints how to update it by hand.
 
+**Set your capital**: the money you've set aside for swing trading. Every quantity and ₹-at-risk figure is calculated from it:
+
+```sh
+python swing.py capital 250000      # set it (₹2,50,000)
+python swing.py capital             # show capital, cash, risk per trade and max per stock
+```
+
+You can also change it on the dashboard's **Settings** page. Your live capital is this starting amount plus the profit or loss of trades you've closed.
+
 Then look at today's scan:
 
 ```sh
@@ -96,6 +105,29 @@ Then, in the evening:
 `python swing.py scan` shows the same report without downloading or saving anything. Use `scan --date 2024-03-15` to see what the rules said on a past day.
 
 If the download fails (no internet), `run` uses the cached data and warns that it may be stale.
+
+### Analyse any stock you choose
+
+```sh
+python swing.py analyze TCS
+python swing.py analyze IRCTC --add      # also add it to the watchlist for the daily scan
+```
+
+or open the dashboard's **Analyze** page and type a symbol. It works for any NSE stock: if its prices aren't stored yet they are downloaded on the spot (`--no-download` to stay offline). You get:
+
+- **Verdict:** "buy setup by the rules" (exactly what the daily scan would say) or "no setup today".
+- **Rule checklist:** every buy rule as ✅/❌ with the numbers, and ✓/✗ for each part, e.g. "✗ 50 EMA ₹2,357 above 200 EMA".
+- **Trade plan:** the real plan for a setup, or a clearly labelled *hypothetical* plan ("IF you bought at today's close") when it isn't one. The hypothetical plan is information, not a signal.
+- **Approximate target date** (see below) and a chart with entry, stop and target lines.
+
+### Approximate target date
+
+Every signal, and every analysis, shows a rough window for reaching the target, for example *"about 02 Dec – 11 Dec 2026 (most likely ~07 Dec); time stop 22 Dec"*. It combines:
+
+1. **This stock's speed:** how many days its typical daily range (ATR) needs to cover the distance to the target (the fastest realistic case).
+2. **History:** how long winning trades took in your latest backtest (`python swing.py backtest`), for example 4–13 trading days, median 9.
+
+Dates count weekdays from the next trading day (exchange holidays aren't excluded). **It is an estimate, not a promise:** in the backtest only about 1 in 5 trades reached its target at all; the rest exited at the stop, on a trend break or at the 20-day time stop.
 
 ## 4. Logging your trades
 
@@ -178,7 +210,15 @@ On macOS/Linux, cron skips runs while the computer is off or asleep. On any syst
 python swing.py dashboard
 ```
 
-Opens http://localhost:8501 in your browser (Ctrl+C in the terminal to stop it).
+Opens http://localhost:8501 in your browser (Ctrl+C in the terminal to stop it). By default only this computer can connect.
+
+**Use it from your phone or another PC at home:**
+
+```sh
+python swing.py dashboard --lan
+```
+
+This prints an address like `http://192.168.1.20:8501`; open it on any device on the same Wi-Fi/router. The dashboard has **no login**: anyone on that network can see your positions and change your trade log, so only use `--lan` on your own home network, never on café, office or hotel Wi-Fi. If the phone can't connect, allow Python through Windows Firewall for **Private** networks and set your home network to Private (Settings → Network & internet → your connection → Private network). It is not reachable from the internet; that would need a login first.
 
 | Page | What it shows |
 |---|---|

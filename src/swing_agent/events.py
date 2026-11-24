@@ -191,6 +191,7 @@ def refresh_earnings(
     force: bool = False,
     lookback_days: int = 30,
     fetch=None,
+    update_marker: bool = True,
 ) -> str:
     """Best-effort refresh of RESULTS dates from Yahoo (``source='yfinance'``). Never raises.
 
@@ -227,7 +228,7 @@ def refresh_earnings(
         got += bool(dates)
         if fetch is _yf_earnings and i % 10 == 9:
             _time.sleep(1.0)  # polite throttling
-    if marker and (got or not failed):
+    if update_marker and marker and (got or not failed):
         marker.write_text(today.isoformat())
     msg = f"Results dates from Yahoo: {got}/{len(symbols)} symbols updated"
     return msg + (f"; {len(failed)} unavailable." if failed else ".")

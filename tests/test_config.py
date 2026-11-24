@@ -12,7 +12,7 @@ def _raw():
 
 
 def test_default_config_is_valid(cfg):
-    assert cfg.account.capital == 100000
+    assert cfg.account.capital > 0
     assert cfg.data.index_symbol == "^NSEI"
     assert cfg.watchlist_path.name == "nifty100.csv"
 
@@ -61,3 +61,19 @@ def test_invalid_yaml(tmp_path):
     p.write_text("account: [unclosed", encoding="utf-8")
     with pytest.raises(ConfigError, match="not valid YAML"):
         load_config(p)
+
+
+def test_set_capital_keeps_comments_and_validates(tmp_path):
+    import shutil
+
+    from swing_agent.config import set_capital
+
+    p = tmp_path / "config.yaml"
+    shutil.copy(ROOT / "config.yaml", p)
+    cfg = set_capital(250000, p)
+    assert cfg.account.capital == 250000 and cfg.backtest.initial_capital == 100000
+    text = p.read_text(encoding="utf-8")
+    assert "  capital: 250000            # INR" in text
+    with pytest.raises(ConfigError, match="account.capital"):
+        set_capital(0, p)
+    assert load_config(p).account.capital == 250000   # bad value was not saved

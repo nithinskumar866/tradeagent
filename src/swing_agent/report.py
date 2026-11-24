@@ -28,6 +28,8 @@ def signal_block(s: Signal) -> list[str]:
         f"- Stop-loss: {inr(s.stop)} ({pct(s.stop_pct)} below planned entry)   "
         f"Target: {inr(s.target)}   R:R {s.rr:.1f}   Score {s.score:.1f}",
     ]
+    if s.target_eta:
+        lines.append(f"- Target date (estimate): {s.target_eta}")
     if s.qty:
         lines.append(f"- Qty: {s.qty}   Position: {inr(s.qty * s.entry_plan, 0)}   "
                      f"Risk: {inr(s.risk_amount)}   Est. round-trip costs: {inr(s.est_costs)}")

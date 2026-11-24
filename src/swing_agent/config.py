@@ -196,3 +196,22 @@ def load_config(path: str | Path | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("config.yaml must contain a mapping of sections (account, universe, ...).")
     return parse_config(raw)
+
+
+def set_capital(amount: float, path: str | Path | None = None) -> Config:
+    """Change ``account.capital`` in config.yaml, keeping the file's comments and layout.
+
+    Validates the new value (and the whole file) before saving; raises ConfigError if invalid.
+    """
+    import re
+
+    cfg_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    text = cfg_path.read_text(encoding="utf-8")
+    m = re.search(r"(?ms)^account:\s*\n(?:[ \t]+.*\n)*?([ \t]+capital:[ \t]*)([0-9_.]+)", text)
+    if not m:
+        raise ConfigError("Couldn't find account.capital in config.yaml; edit it by hand.")
+    value = int(amount) if float(amount).is_integer() else float(amount)
+    new_text = text[: m.start(2)] + str(value) + text[m.end(2):]
+    parsed = parse_config(yaml.safe_load(new_text))  # raises ConfigError on a bad value
+    cfg_path.write_text(new_text, encoding="utf-8")
+    return parsed

@@ -143,6 +143,7 @@ def _signal_row(s: Signal) -> dict:
         "rr": s.rr, "score": s.score, "reasons_json": json.dumps(s.reasons, ensure_ascii=False),
         "warnings_json": json.dumps(s.warnings, ensure_ascii=False), "regime": None,
         "status": s.status, "status_note": s.status_note, "explanation": s.explanation,
+        "target_eta": s.target_eta,
     }
 
 
@@ -210,6 +211,12 @@ def daily(
         regime = result.regime
         prev_regime = db.previous_run_regime(conn, rd) or prev_day
         size_signals(result.signals, portfolio.capital, portfolio.available_cash, cfg, regime.risk_multiplier)
+        if result.signals:
+            from .analyze import estimate_target, target_history
+
+            hist = target_history(reports_dir)  # backtests are saved in the same reports folder
+            for s in result.signals:
+                s.target_eta = estimate_target(s.entry_plan, s.target, s.atr, run_date, cfg, hist).short()
         if cfg.explainer.enabled and result.signals:
             from .explainer import explain_signals
 

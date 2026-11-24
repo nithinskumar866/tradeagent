@@ -245,16 +245,84 @@ def cmd_backtest(args, cfg) -> int:
     return 0
 
 
+def cmd_capital(args, cfg) -> int:
+    from swing_agent import db
+    from swing_agent.config import set_capital
+    from swing_agent.fmt import inr
+    from swing_agent.portfolio import build_portfolio
+
+    if args.amount is not None:
+        cfg = set_capital(args.amount, args.config)
+        print(f"Starting capital set to {inr(cfg.account.capital, 0)} in config.yaml.")
+    pf = build_portfolio(db.get_trades(db.connect()), cfg.account.capital)
+    a = cfg.account
+    print(f"Starting capital {inr(a.capital, 0)} + realised P&L {inr(pf.realised_pnl, 0)} "
+          f"= capital {inr(pf.capital, 0)}")
+    print(f"Invested {inr(pf.invested, 0)} · available cash {inr(pf.available_cash, 0)}")
+    print(f"Per trade: risk up to {inr(pf.capital * a.risk_per_trade_pct / 100, 0)} "
+          f"({a.risk_per_trade_pct:g}%; half in a CAUTION market), max {inr(pf.capital * a.max_position_pct / 100, 0)} "
+          f"in one stock ({a.max_position_pct:g}%), up to {a.max_open_positions} positions.")
+    return 0
+
+
+def cmd_analyze(args, cfg) -> int:
+    from swing_agent import db
+    from swing_agent.analyze import AnalyzeError, add_to_watchlist, analyze_symbol, format_analysis
+
+    conn = db.connect()
+    try:
+        a = analyze_symbol(conn, cfg, args.symbol, allow_download=not args.no_download,
+                           capital_override=args.capital)
+    except AnalyzeError as err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 1
+    print(format_analysis(a))
+    if args.add:
+        if add_to_watchlist(conn, cfg, a.symbol, a.name, a.sector):
+            print(f"\nAdded {a.symbol} to {cfg.universe.watchlist_file}; the daily scan will now include it.")
+        else:
+            print(f"\n{a.symbol} is already in the watchlist.")
+    return 0
+
+
 def cmd_dashboard(args, cfg) -> int:
     import subprocess
 
     app = Path(__file__).resolve().parent / "app.py"
+    # Private by default: only this computer can connect. --lan opens it to the local network.
+    address = "0.0.0.0" if args.lan else "localhost"
     print(f"Opening the dashboard at http://localhost:{args.port}  (Ctrl+C to stop)")
+    if args.lan:
+        ips = _lan_ips()
+        print("Also reachable from phones/PCs on the same network at: "
+              + (", ".join(f"http://{ip}:{args.port}" for ip in ips) or "(no LAN address found)"))
+        print("Note: the dashboard has no login. Anyone on this network can see and change your trade log.")
     cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
-           "--browser.gatherUsageStats", "false"]
+           "--server.address", address, "--browser.gatherUsageStats", "false"]
     if args.headless:
         cmd += ["--server.headless", "true"]
     return subprocess.call(cmd)
+
+
+def _lan_ips() -> list[str]:
+    """Private IPv4 addresses of this machine (192.168.x, 10.x, 172.16–31.x), best effort."""
+    import ipaddress
+    import socket
+
+    primary = None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 80))  # no packet is sent; just picks the default interface
+            primary = s.getsockname()[0]
+    except OSError:
+        pass
+    if primary and ipaddress.ip_address(primary).is_private and not primary.startswith("127."):
+        return [primary]   # the address your router gave this machine
+    try:
+        found = {i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+    except OSError:
+        found = set()
+    return sorted(ip for ip in found if ipaddress.ip_address(ip).is_private and not ip.startswith("127."))
 
 
 def cmd_events(args, cfg) -> int:
@@ -361,9 +429,23 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Parameter grid, e.g. --sweep target_r=1.5,2,2.5 rsi_dip_max=45,50,55")
     s.set_defaults(func=cmd_backtest)
 
+    s = sub.add_parser("capital", help="Show or set your trading capital (used for all position sizes)")
+    s.add_argument("amount", nargs="?", type=float, help="New starting capital in ₹, e.g. 250000")
+    s.set_defaults(func=cmd_capital)
+
+    s = sub.add_parser("analyze", help="Analyse any NSE stock: rule checklist, plan, target date")
+    s.add_argument("symbol", help="NSE symbol, e.g. TCS, RELIANCE, M&M")
+    s.add_argument("--no-download", action="store_true", help="Use stored prices only (offline)")
+    s.add_argument("--add", action="store_true", help="Also add it to the watchlist for the daily scan")
+    s.add_argument("--capital", type=float, metavar="RUPEES",
+                   help="What-if: size the plan as if your capital were this amount (saved capital unchanged)")
+    s.set_defaults(func=cmd_analyze)
+
     s = sub.add_parser("dashboard", help="Launch the Streamlit dashboard")
     s.add_argument("--port", type=int, default=8501)
     s.add_argument("--headless", action="store_true", help="Don't open a browser window")
+    s.add_argument("--lan", action="store_true",
+                   help="Also allow phones/PCs on your local network to connect (no login!)")
     s.set_defaults(func=cmd_dashboard)
 
     e = sub.add_parser("events", help="Event calendar (results dates, RBI, Budget, Fed...)")

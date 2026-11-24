@@ -16,7 +16,7 @@ from swing_agent.market_filter import compute_regime_series
 from swing_agent.scanner import setup_frame
 from swing_agent.trading import log_buy, log_sell
 
-PAGES = ["Today", "My positions", "Chart", "Backtest", "Journal", "Events", "Settings"]
+PAGES = ["Today", "Analyze", "My positions", "Chart", "Backtest", "Journal", "Events", "Settings"]
 
 
 @pytest.fixture

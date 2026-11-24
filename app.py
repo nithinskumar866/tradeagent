@@ -38,7 +38,7 @@ REGIME_STYLE = {
     "BEARISH": ("error", "🔴"), "FEAR": ("error", "🔴"),
 }
 REPORTS = Path(os.environ.get("SWING_AGENT_REPORTS") or PROJECT_ROOT / "reports")
-PAGES = ["Today", "My positions", "Chart", "Backtest", "Journal", "Events", "Settings"]
+PAGES = ["Today", "Analyze", "My positions", "Chart", "Backtest", "Journal", "Events", "Settings"]
 
 st.set_page_config(page_title="Swing Agent", page_icon="📈", layout="wide")
 
@@ -235,6 +235,8 @@ def page_today() -> None:
                                "the AI only explains.")
                 for reason in json.loads(r.reasons_json or "[]"):
                     st.markdown(f"- {reason}")
+                if isinstance(r.target_eta, str) and r.target_eta:
+                    st.markdown(f"**Target date (estimate):** {r.target_eta}")
                 warns = json.loads(r.warnings_json or "[]")
                 if warns:
                     st.caption("Warnings: " + "; ".join(warns))
@@ -321,6 +323,120 @@ def page_positions() -> None:
         buy_form(None, "positions")
 
 
+def price_chart(f: pd.DataFrame, levels: list[tuple[str, float | None, str]]) -> None:
+    """Candles + EMA 20/50/200, volume and RSI panels, with optional horizontal price levels."""
+    e = cfg.entry
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.62, 0.16, 0.22],
+                        vertical_spacing=0.03)
+    fig.add_trace(go.Candlestick(x=f.index, open=f["open"], high=f["high"], low=f["low"], close=f["close"],
+                                 name="Price", increasing_line_color=GOOD, decreasing_line_color=CRITICAL,
+                                 increasing_fillcolor=GOOD, decreasing_fillcolor=CRITICAL), row=1, col=1)
+    for col, n, color in (("ema_s", e.ema_short, SERIES[0]), ("ema_m", e.ema_mid, SERIES[1]),
+                          ("ema_l", e.ema_long, SERIES[2])):
+        fig.add_trace(go.Scatter(x=f.index, y=f[col], name=f"EMA {n}", line=dict(color=color, width=2)),
+                      row=1, col=1)
+    up = f["close"] >= f["open"]
+    fig.add_trace(go.Bar(x=f.index, y=f["volume"], name="Volume", showlegend=False,
+                         marker_color=[GOOD if u else CRITICAL for u in up], opacity=0.5), row=2, col=1)
+    fig.add_trace(go.Scatter(x=f.index, y=f["rsi"], name="RSI", showlegend=False,
+                             line=dict(color=SERIES[0], width=2)), row=3, col=1)
+    for lvl in (30, 70):
+        fig.add_hline(y=lvl, line=dict(color=MUTED, width=1, dash="dot"), row=3, col=1)
+    fig.add_hrect(y0=e.rsi_dip_min, y1=e.rsi_dip_max, fillcolor=SERIES[0], opacity=0.07, line_width=0,
+                  row=3, col=1)
+    for label, val, color in levels:
+        if val:
+            fig.add_hline(y=val, line=dict(color=color, width=1.5, dash="dash"), row=1, col=1,
+                          annotation_text=f"{label} {inr(val)}", annotation_position="top left",
+                          annotation_font_color=color)
+    fig.update_layout(xaxis_rangeslider_visible=False)
+    fig.update_yaxes(title_text="₹", row=1, col=1)
+    fig.update_yaxes(title_text="Vol", row=2, col=1)
+    fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    st.plotly_chart(chart_layout(fig, 720), use_container_width=True)
+
+
+def page_analyze() -> None:
+    from swing_agent.analyze import AnalyzeError, add_to_watchlist, analyze_symbol
+
+    st.header("Analyze a stock")
+    st.caption("Type any NSE symbol. You get every buy rule as pass/fail with the numbers, a trade plan, and an "
+               "approximate target date. Stocks outside your watchlist are downloaded when you click Analyze.")
+    with st.form("analyze_form"):
+        c1, c2, c3 = st.columns([3, 2, 1])
+        text = c1.text_input("NSE symbol", value=st.session_state.get("an_sym", ""),
+                             placeholder="e.g. TCS, RELIANCE, M&M, IRCTC")
+        whatif = c2.number_input("What if my capital were (₹)", min_value=0.0, step=10000.0, format="%.0f",
+                                 value=float(st.session_state.get("an_cap", 0.0)),
+                                 help=f"Leave at 0 to use your saved capital ({inr(cfg.account.capital, 0)}). "
+                                      "This only changes this analysis, not your saved capital.")
+        c3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+        if c3.form_submit_button("Analyze", use_container_width=True) and text.strip():
+            st.session_state["an_sym"] = text.strip()
+            st.session_state["an_cap"] = whatif
+    sym = st.session_state.get("an_sym")
+    cap = st.session_state.get("an_cap") or None
+    if not sym:
+        return
+    with st.spinner(f"Analysing {sym}…"):
+        try:
+            a = analyze_symbol(conn(), cfg, sym, capital_override=cap)
+        except AnalyzeError as err:
+            st.error(str(err))
+            return
+    st.subheader(f"{a.symbol}" + (f" — {a.name}" if a.name else "") + f" ({a.sector})")
+    st.caption(f"Data as of {a.asof} · close {inr(a.close)} · market {a.regime.regime}"
+               + (" · downloaded just now" if a.downloaded else ""))
+    if a.held:
+        st.info(a.held)
+    if a.is_setup:
+        st.success("✅ **Buy setup by the rules**: the same as a daily-scan signal.")
+    else:
+        failed = [c.rule for c in a.checks if not c.passed]
+        st.warning("❌ **No buy setup today by the rules.** Failing: " + ", ".join(failed) + ".")
+    st.dataframe(pd.DataFrame([{"": "✅" if c.passed else "❌", "Rule": c.rule, "Details": c.detail}
+                               for c in a.checks]), hide_index=True, use_container_width=True)
+
+    p = a.plan
+    if p is not None:
+        st.markdown("#### " + ("Trade plan (rules)" if p.kind == "SIGNAL"
+                              else "Hypothetical plan: IF you bought at today's close (not a signal)"))
+        if p.stop is None:
+            st.caption(p.note)
+        else:
+            m = st.columns(5)
+            if p.buy_zone:
+                m[0].metric("Buy zone", f"{inr(p.buy_zone[0], 0)}–{inr(p.buy_zone[1], 0)}")
+            else:
+                m[0].metric("Entry", inr(p.entry))
+            m[1].metric("Stop-loss", inr(p.stop), f"-{p.stop_pct:.1f}%", delta_color="off")
+            m[2].metric("Target (2R)", inr(p.target))
+            m[3].metric("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", delta_color="off")
+            m[4].metric("₹ at risk", inr(p.risk_amount, 0))
+            (st.warning if cap else st.caption)(a.sizing)
+            if p.note:
+                st.caption(p.note)
+            if p.eta:
+                st.markdown("#### Approximate target date")
+                st.info(p.eta.text(p.target))
+    for w in a.warnings:
+        st.caption(f"⚠️ {w}")
+    if not a.in_watchlist:
+        st.caption(f"{a.symbol} is not in your watchlist, so the daily scan doesn't check it.")
+        if st.button(f"Add {a.symbol} to the watchlist"):
+            add_to_watchlist(conn(), cfg, a.symbol, a.name, a.sector)
+            st.success(f"Added. The daily scan will include {a.symbol} from the next run.")
+    if a.frame is not None:
+        f = a.frame[a.frame.index >= a.frame.index[-1] - pd.DateOffset(months=12)]
+        levels = [] if p is None or p.stop is None else [
+            ("Entry" if p.kind == "HYPOTHETICAL" else "Buy zone top", p.buy_zone[1] if p.buy_zone else p.entry, MUTED),
+            ("Stop", p.stop, CRITICAL), ("Target", p.target, GOOD)]
+        price_chart(f, levels)
+    if a.is_setup and p is not None and p.qty:
+        buy_form({"symbol": a.symbol, "price": p.buy_zone[1], "qty": p.qty, "stop": p.stop}, f"an_{a.symbol}")
+
+
 def page_chart() -> None:
     st.header("Chart")
     c = conn()
@@ -346,26 +462,6 @@ def page_chart() -> None:
     months = {"6M": 6, "1Y": 12, "2Y": 24, "5Y": 60}[span]
     f = f[f.index >= f.index[-1] - pd.DateOffset(months=months)]
 
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.62, 0.16, 0.22],
-                        vertical_spacing=0.03)
-    fig.add_trace(go.Candlestick(x=f.index, open=f["open"], high=f["high"], low=f["low"], close=f["close"],
-                                 name="Price", increasing_line_color=GOOD, decreasing_line_color=CRITICAL,
-                                 increasing_fillcolor=GOOD, decreasing_fillcolor=CRITICAL), row=1, col=1)
-    e = cfg.entry
-    for col, n, color in (("ema_s", e.ema_short, SERIES[0]), ("ema_m", e.ema_mid, SERIES[1]),
-                          ("ema_l", e.ema_long, SERIES[2])):
-        fig.add_trace(go.Scatter(x=f.index, y=f[col], name=f"EMA {n}", line=dict(color=color, width=2)),
-                      row=1, col=1)
-    up = f["close"] >= f["open"]
-    fig.add_trace(go.Bar(x=f.index, y=f["volume"], name="Volume", showlegend=False,
-                         marker_color=[GOOD if u else CRITICAL for u in up], opacity=0.5), row=2, col=1)
-    fig.add_trace(go.Scatter(x=f.index, y=f["rsi"], name="RSI", showlegend=False,
-                             line=dict(color=SERIES[0], width=2)), row=3, col=1)
-    for lvl in (30, 70):
-        fig.add_hline(y=lvl, line=dict(color=MUTED, width=1, dash="dot"), row=3, col=1)
-    fig.add_hrect(y0=e.rsi_dip_min, y1=e.rsi_dip_max, fillcolor=SERIES[0], opacity=0.07, line_width=0,
-                  row=3, col=1)
-
     levels = []
     pos = pf.positions.get(sym)
     if pos:
@@ -375,17 +471,8 @@ def page_chart() -> None:
         if s is not None:
             levels = [(f"Buy zone top ({s['run_date']})", s["buy_zone_high"], MUTED), ("Stop", s["stop"], CRITICAL),
                       ("Target", s["target"], GOOD)]
-    for label, val, color in levels:
-        if val:
-            fig.add_hline(y=val, line=dict(color=color, width=1.5, dash="dash"), row=1, col=1,
-                          annotation_text=f"{label} {inr(val)}", annotation_position="top left",
-                          annotation_font_color=color)
-    fig.update_layout(xaxis_rangeslider_visible=False)
-    fig.update_yaxes(title_text="₹", row=1, col=1)
-    fig.update_yaxes(title_text="Vol", row=2, col=1)
-    fig.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1)
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    st.plotly_chart(chart_layout(fig, 720), use_container_width=True)
+    price_chart(f, levels)
+    e = cfg.entry
     last = f.iloc[-1]
     st.caption(f"{sym} · last close {inr(last['close'])} on {f.index[-1].date()} · RSI {last['rsi']:.0f} · "
                f"ATR {inr(last['atr'])} · shaded band = RSI dip zone {e.rsi_dip_min:g}–{e.rsi_dip_max:g}")
@@ -538,8 +625,37 @@ def page_events() -> None:
 
 
 def page_settings() -> None:
+    from swing_agent.config import set_capital
+
     st.header("Settings")
-    st.caption("Read-only. Edit config.yaml in a text editor, then reload this page.")
+    st.subheader("Your capital")
+    st.caption("The money you have set aside for swing trading. Every quantity and ₹-at-risk figure is "
+               "calculated from it (plus your realised profit or loss).")
+    with st.form("capital_form"):
+        c1, c2 = st.columns([3, 1])
+        amount = c1.number_input("Starting capital (₹)", min_value=1000.0, value=float(cfg.account.capital),
+                                 step=10000.0, format="%.0f")
+        if c2.form_submit_button("Save", use_container_width=True):
+            try:
+                new = set_capital(amount)
+                st.success(f"Saved. Capital is now {inr(new.account.capital, 0)}. New sizes apply from the next "
+                           "scan (click Re-scan in the sidebar to update today's signals).")
+                st.cache_data.clear()
+            except ConfigError as err:
+                st.error(str(err))
+    a = cfg.account
+    try:
+        pf = build_portfolio(db.get_trades(conn()), cfg.account.capital)
+        m = st.columns(4)
+        m[0].metric("Capital now", inr(pf.capital, 0), f"realised P&L {inr(pf.realised_pnl, 0)}", delta_color="off")
+        m[1].metric("Available cash", inr(pf.available_cash, 0))
+        m[2].metric(f"Risk per trade ({a.risk_per_trade_pct:g}%)", inr(pf.capital * a.risk_per_trade_pct / 100, 0))
+        m[3].metric(f"Max in one stock ({a.max_position_pct:g}%)", inr(pf.capital * a.max_position_pct / 100, 0))
+    except PortfolioError as err:
+        st.error(str(err))
+    st.divider()
+    st.subheader("config.yaml")
+    st.caption("Everything else is read-only here. Edit config.yaml in a text editor, then reload this page.")
     try:
         load_config()
         st.success("config.yaml is valid.")
@@ -550,5 +666,5 @@ def page_settings() -> None:
     st.caption(f"Database: {db.DEFAULT_DB_PATH} · {len(s)} symbols · {int(s['bars'].sum()) if len(s) else 0} bars")
 
 
-{"Today": page_today, "My positions": page_positions, "Chart": page_chart, "Backtest": page_backtest,
+{"Today": page_today, "Analyze": page_analyze, "My positions": page_positions, "Chart": page_chart, "Backtest": page_backtest,
  "Journal": page_journal, "Events": page_events, "Settings": page_settings}[page]()

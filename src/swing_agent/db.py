@@ -107,6 +107,7 @@ MIGRATIONS = [
     ("signals", "status_note", "TEXT"),
     ("runs", "regime", "TEXT"),
     ("signals", "explanation", "TEXT"),
+    ("signals", "target_eta", "TEXT"),
 ]
 
 
