@@ -179,6 +179,51 @@ def cmd_trade(args, cfg) -> int:
     return 0
 
 
+def cmd_backtest(args, cfg) -> int:
+    from datetime import datetime
+
+    from swing_agent import db
+    from swing_agent.backtest import (
+        backtest_from_cache,
+        load_prices,
+        parse_sweep,
+        run_sweep,
+        summary_markdown,
+        write_outputs,
+    )
+    from swing_agent.config import PROJECT_ROOT
+
+    start, end = _parse_date(args.start, "--start"), _parse_date(args.end, "--end")
+    conn = db.connect()
+    try:
+        cache = load_prices(conn, cfg)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if args.sweep:
+            grid = parse_sweep(args.sweep, cfg)
+            n = 1
+            for _, _, vals in grid:
+                n *= len(vals)
+            print(f"Running {n} backtests (this checks stability, not which one is 'best')...")
+            table = run_sweep(cache, cfg, grid, start, end)
+            out = PROJECT_ROOT / "reports" / f"sweep_{stamp}.csv"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            table.to_csv(out, index=False)
+            print(table.round(2).to_string(index=False))
+            print(f"\nSaved to {out}")
+            print("Look for results that stay similar across nearby values. Judge on the oos_ columns.")
+            return 0
+        print("Running backtest...")
+        res = backtest_from_cache(cache, cfg, start, end)
+    except ValueError as err:
+        print(f"Error: {err}", file=sys.stderr)
+        return 1
+    out = PROJECT_ROOT / "reports" / f"backtest_{stamp}"
+    periods = write_outputs(res, cfg, out)
+    print(summary_markdown(res, cfg, periods))
+    print(f"\nSaved trades.csv, equity.csv and summary.md to {out}")
+    return 0
+
+
 def _not_yet(milestone: int):
     def _cmd(args, cfg) -> int:
         print(f"`{args.command}` is not built yet (planned for milestone {milestone}).")
@@ -236,8 +281,14 @@ def build_parser() -> argparse.ArgumentParser:
     tsub.add_parser("list", help="Show trades and open positions")
     t.set_defaults(func=cmd_trade)
 
+    s = sub.add_parser("backtest", help="Run the backtester on stored history")
+    s.add_argument("--start", help="Start date YYYY-MM-DD (default: config backtest.start_date)")
+    s.add_argument("--end", help="End date YYYY-MM-DD (default: latest data)")
+    s.add_argument("--sweep", nargs="+", metavar="KEY=V1,V2",
+                   help="Parameter grid, e.g. --sweep target_r=1.5,2,2.5 rsi_dip_max=45,50,55")
+    s.set_defaults(func=cmd_backtest)
+
     for name, ms, helptext in [
-        ("backtest", 4, "Run the backtester"),
         ("dashboard", 5, "Launch the Streamlit dashboard"),
         ("events", 6, "Manage the event calendar"),
     ]:
