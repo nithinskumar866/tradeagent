@@ -29,6 +29,26 @@ def windows_command(run_time_ist: str, root: Path = PROJECT_ROOT) -> str:
             f'/D MON,TUE,WED,THU,FRI /ST {local} /F')
 
 
+def windows_powershell(run_time_ist: str, root: Path = PROJECT_ROOT) -> str:
+    """PowerShell that registers a hidden (no console window) weekday task.
+
+    Uses pythonw.exe so nothing can close the run by accident, and -StartWhenAvailable so a
+    run missed while the laptop was off or asleep happens as soon as it's back.
+    """
+    local, _ = local_run_time(run_time_ist)
+    pyw = root / ".venv" / "Scripts" / "pythonw.exe"
+    return "; ".join([
+        f"$a = New-ScheduledTaskAction -Execute '{pyw}' "
+        f"-Argument 'swing.py run --log-file logs/scheduled_run.log' -WorkingDirectory '{root}'",
+        f"$t = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At {local}",
+        "$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries "
+        "-AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)",
+        f"Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $a -Trigger $t -Settings $s "
+        "-Description 'Swing agent daily run (python swing.py run)' -Force | Out-Null",
+        f"'Scheduled task {TASK_NAME} registered.'",
+    ])
+
+
 def cron_line(run_time_ist: str, root: Path = PROJECT_ROOT) -> str:
     """crontab line (local time) that runs scripts/run_daily.sh on weekdays."""
     local, _ = local_run_time(run_time_ist)
@@ -43,8 +63,10 @@ def instructions(run_time_ist: str) -> str:
     lines = [f"Scheduled time: {run_time_ist} IST = {local} on this machine ({tzname}), Monday–Friday.", ""]
     if system == "Windows":
         lines += [
-            "Windows: run this once in a Command Prompt (or use `python swing.py schedule --install`):",
+            "Windows: run `python swing.py schedule --install`. It registers a task that runs hidden",
+            "(no console window) and catches up if the computer was off or asleep at that time.",
             "",
+            "Simpler alternative (shows a console window, no catch-up), in a Command Prompt:",
             "  " + windows_command(run_time_ist),
             "",
             f'Check it:  schtasks /Query /TN "{TASK_NAME}"',
@@ -60,6 +82,5 @@ def instructions(run_time_ist: str) -> str:
             "cron uses the machine's local time (converted above). Output goes to logs/scheduled_run.log.",
             "First make the script executable: chmod +x scripts/run_daily.sh",
         ]
-    lines += ["", "If the computer was off or asleep at that time, just run `python swing.py run` "
-              "or click 'Update data now' in the dashboard."]
+    lines += ["", "You can always run it by hand: `python swing.py run`, or 'Update data now' in the dashboard."]
     return "\n".join(lines)

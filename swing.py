@@ -128,6 +128,26 @@ def cmd_run(args, cfg) -> int:
     from swing_agent.pipeline import daily
     from swing_agent.report import format_daily
 
+    if args.log_file:  # scheduled, windowless runs: write everything (including errors) to a file
+        import traceback
+        from datetime import datetime
+
+        from swing_agent.config import PROJECT_ROOT
+
+        path = Path(args.log_file)
+        path = path if path.is_absolute() else PROJECT_ROOT / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as out:
+            out.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+            try:
+                result = daily(db.connect(), cfg, do_update=not args.no_update, persist=True)
+                out.write(format_daily(result, cfg) + f"\n\nReport saved to {result.report_path}\n")
+                return 1 if result.update and result.update.offline else 0
+            except Exception:
+                log.exception("Scheduled run failed")
+                out.write("RUN FAILED:\n" + traceback.format_exc())
+                return 1
+
     conn = db.connect()
     result = daily(conn, cfg, do_update=not args.no_update, persist=True)
     print(format_daily(result, cfg))
@@ -271,7 +291,7 @@ def cmd_schedule(args, cfg) -> int:
     import platform
     import subprocess
 
-    from swing_agent.scheduling import instructions, windows_command
+    from swing_agent.scheduling import instructions, windows_powershell
 
     print(instructions(cfg.schedule.run_time_ist))
     if args.install:
@@ -279,7 +299,8 @@ def cmd_schedule(args, cfg) -> int:
             print("\n--install only works on Windows. Add the cron line above with `crontab -e`.")
             return 1
         print("\nInstalling the scheduled task...")
-        return subprocess.call(windows_command(cfg.schedule.run_time_ist), shell=True)
+        return subprocess.call(["powershell", "-NoProfile", "-Command",
+                                windows_powershell(cfg.schedule.run_time_ist)])
     return 0
 
 
@@ -309,6 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("run", help="update + scan + save report (used by the scheduler)")
     s.add_argument("--no-update", action="store_true", help="Skip the download step")
+    s.add_argument("--log-file", help="Append the report and any error to this file instead of printing")
     s.set_defaults(func=cmd_run)
 
     t = sub.add_parser("trade", help="Log your own trades (no broker connection)")

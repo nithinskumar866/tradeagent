@@ -146,19 +146,19 @@ python swing.py schedule
 
 prints the exact command for your operating system, with the IST run time (`schedule.run_time_ist`, default 18:30) converted to your computer's time zone.
 
-**Windows.** `scripts\run_daily.bat` runs `swing.py run` and appends the output to `logs\scheduled_run.log`. Either let the tool create the Task Scheduler entry:
+**Windows.** Run once:
 
 ```bat
 python swing.py schedule --install
 ```
 
-or run the printed command yourself, which looks like:
+This registers a Task Scheduler task called `SwingAgentDaily` that runs `swing.py run` on weekdays. It runs **hidden** (`pythonw.exe`, so there's no console window to close by accident) and, if the computer was off or asleep at the scheduled time, it **runs as soon as the computer is back**. The report and any error are appended to `logs\scheduled_run.log`.
 
-```bat
-schtasks /Create /TN "SwingAgentDaily" /TR "\"C:\path\to\tradeagent\scripts\run_daily.bat\"" /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 18:30 /F
-```
+- Check it: `schtasks /Query /TN "SwingAgentDaily"`
+- Run it now: `schtasks /Run /TN "SwingAgentDaily"`
+- Remove it: `schtasks /Delete /TN "SwingAgentDaily" /F`
 
-Check it with `schtasks /Query /TN "SwingAgentDaily"`; remove it with `schtasks /Delete /TN "SwingAgentDaily" /F`.
+`scripts\run_daily.bat` does the same run when double-clicked. `swing.py schedule` (without `--install`) also prints a plain `schtasks` command; that version shows a console window and doesn't catch up missed runs.
 
 **macOS / Linux.** Make the script executable and add a cron line (`crontab -e`). Cron uses the machine's local time, so use the time `swing.py schedule` prints. On an IST machine:
 
@@ -170,7 +170,7 @@ chmod +x scripts/run_daily.sh
 
 On macOS, cron may need Full Disk Access (System Settings → Privacy & Security) to reach your project folder.
 
-**If the computer was off or asleep** at that time, nothing runs. Just run `python swing.py run`, or click **Update data now** in the dashboard.
+On macOS/Linux, cron skips runs while the computer is off or asleep. On any system you can run `python swing.py run` yourself, or click **Update data now** in the dashboard.
 
 ## 7. Dashboard
 

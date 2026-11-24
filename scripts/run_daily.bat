@@ -1,6 +1,4 @@
 @echo off
-REM Daily swing-agent run (used by Windows Task Scheduler). Safe to double-click too.
+REM Daily swing-agent run. Safe to double-click; output is appended to logs\scheduled_run.log.
 cd /d "%~dp0.."
-if not exist logs mkdir logs
-echo ===== %date% %time% ===== >> "logs\scheduled_run.log"
-".venv\Scripts\python.exe" swing.py run >> "logs\scheduled_run.log" 2>&1
+".venv\Scripts\python.exe" swing.py run --log-file logs\scheduled_run.log
