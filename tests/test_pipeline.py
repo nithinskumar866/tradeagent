@@ -22,6 +22,8 @@ def _cfg(cfg, tmp_path):
     wl.write_text("symbol,name,sector\nAAA,Aaa Ltd,IT\nBBB,Bbb Ltd,Bank\n", encoding="utf-8")
     c = cfg.model_copy(deep=True)
     c.universe.watchlist_file = str(wl)
+    c.data.events_file = str(tmp_path / "events.csv")
+    c.data.fetch_results_dates = False
     return c
 
 

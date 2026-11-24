@@ -17,6 +17,8 @@ data:
   index_symbol: "^NSEI"
   vix_symbol: "^INDIAVIX"
   refetch_overlap_days: 5
+  events_file: data/events.csv   # your event calendar (date,symbol,type,note), synced on every run
+  fetch_results_dates: true      # best-effort results dates from Yahoo, refreshed weekly
 
 market_filter:
   ema_fast: 50

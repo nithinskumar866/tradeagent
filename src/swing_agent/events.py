@@ -128,3 +128,106 @@ def import_events(conn: sqlite3.Connection, df: pd.DataFrame, source: str = "man
         except EventError as err:
             problems.append(f"row {i}: {err}")
     return added, problems
+
+
+# ---------------------------------------------------------------- CSV sync
+
+EVENTS_CSV_HEADER = "date,symbol,type,note\n"
+
+
+def sync_events_csv(conn: sqlite3.Connection, path) -> tuple[int, list[str]]:
+    """Make the DB's ``source='csv'`` events match ``data/events.csv`` exactly.
+
+    Rows edited or removed in the CSV are updated/removed in the DB on the next sync.
+    Creates an empty CSV (header only) if none exists.
+    """
+    from pathlib import Path
+
+    path = Path(path)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(EVENTS_CSV_HEADER, encoding="utf-8")
+    try:
+        df = pd.read_csv(path, dtype=str).dropna(how="all")
+    except pd.errors.EmptyDataError:
+        df = pd.DataFrame(columns=["date", "symbol", "type", "note"])
+    conn.execute("DELETE FROM events WHERE source = 'csv'")
+    conn.commit()
+    return import_events(conn, df, source="csv")
+
+
+# ---------------------------------------------------------------- yfinance earnings (best effort)
+
+IST_TZ = "Asia/Kolkata"
+
+
+def _yf_earnings(symbol: str, limit: int = 6) -> list[date]:
+    """Results dates for one NSE symbol from Yahoo, converted to Indian dates."""
+    import yfinance as yf
+
+    from .data_sources.yfinance_source import to_yf_symbol
+
+    df = yf.Ticker(to_yf_symbol(symbol)).get_earnings_dates(limit=limit)
+    if df is None or df.empty:
+        return []
+    idx = pd.DatetimeIndex(df.index)
+    idx = idx.tz_convert(IST_TZ) if idx.tz is not None else idx
+    return sorted({ts.date() for ts in idx})
+
+
+def _marker_path(conn: sqlite3.Connection):
+    from pathlib import Path
+
+    row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = row[2] if row and row[2] else ""
+    return Path(db_file).with_name(".earnings_fetched") if db_file else None
+
+
+def refresh_earnings(
+    conn: sqlite3.Connection,
+    symbols: list[str],
+    today: date | None = None,
+    max_age_days: int = 7,
+    force: bool = False,
+    lookback_days: int = 30,
+    fetch=None,
+) -> str:
+    """Best-effort refresh of RESULTS dates from Yahoo (``source='yfinance'``). Never raises.
+
+    Runs at most every ``max_age_days`` unless ``force``. Keeps dates from
+    ``lookback_days`` ago onwards. ``fetch`` is injectable for tests.
+    """
+    import logging
+    import time as _time
+
+    log = logging.getLogger(__name__)
+    today = today or date.today()
+    marker = _marker_path(conn)
+    if not force and marker and marker.exists():
+        try:
+            last = date.fromisoformat(marker.read_text().strip())
+            if (today - last).days < max_age_days:
+                return f"Results dates from Yahoo are fresh (fetched {last}); skipped."
+        except ValueError:
+            pass
+    fetch = fetch or _yf_earnings
+    cutoff = today - pd.Timedelta(days=lookback_days)
+    got, failed = 0, []
+    for i, sym in enumerate(symbols):
+        try:
+            dates = [d for d in fetch(sym) if d >= cutoff]
+        except Exception as err:  # Yahoo is unofficial; never fail the run
+            failed.append(sym)
+            log.info("Earnings dates for %s unavailable: %s", sym, err)
+            continue
+        conn.execute("DELETE FROM events WHERE source='yfinance' AND symbol=? AND type='RESULTS'", (sym,))
+        conn.commit()
+        for d in dates:
+            add_event(conn, d, sym, "RESULTS", "from Yahoo (verify on NSE)", source="yfinance")
+        got += bool(dates)
+        if fetch is _yf_earnings and i % 10 == 9:
+            _time.sleep(1.0)  # polite throttling
+    if marker and (got or not failed):
+        marker.write_text(today.isoformat())
+    msg = f"Results dates from Yahoo: {got}/{len(symbols)} symbols updated"
+    return msg + (f"; {len(failed)} unavailable." if failed else ".")

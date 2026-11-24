@@ -19,6 +19,7 @@ from swing_agent.logging_setup import setup_logging  # noqa: E402
 from swing_agent.pipeline import NoDataError  # noqa: E402
 from swing_agent.portfolio import PortfolioError  # noqa: E402
 from swing_agent.trading import TradeError  # noqa: E402
+from swing_agent.events import EventError  # noqa: E402
 from swing_agent.watchlist import WatchlistError  # noqa: E402
 
 log = logging.getLogger("swing")
@@ -236,12 +237,50 @@ def cmd_dashboard(args, cfg) -> int:
     return subprocess.call(cmd)
 
 
-def _not_yet(milestone: int):
-    def _cmd(args, cfg) -> int:
-        print(f"`{args.command}` is not built yet (planned for milestone {milestone}).")
-        return 2
+def cmd_events(args, cfg) -> int:
+    from datetime import date, timedelta
 
-    return _cmd
+    from swing_agent import db
+    from swing_agent.events import add_event, delete_event, get_events, refresh_earnings, sync_events_csv
+
+    conn = db.connect()
+    if args.action == "add":
+        d = _parse_date(args.date)
+        new = add_event(conn, d, args.symbol, args.type, args.note or "")
+        print(f"Added event #{new}." if new else "That event is already in the calendar.")
+        print(f"Tip: to keep it permanently in a file you can edit, add it to {cfg.data.events_file} instead.")
+    elif args.action == "delete":
+        print(f"Deleted event #{args.id}." if delete_event(conn, args.id) else f"No event #{args.id}.")
+    elif args.action == "sync":
+        added, problems = sync_events_csv(conn, cfg.resolve(cfg.data.events_file))
+        print(f"Synced {added} event(s) from {cfg.data.events_file}.")
+        for p in problems:
+            print("  " + p)
+    elif args.action == "fetch":
+        syms = db.get_symbols(conn)["symbol"].tolist()
+        print(f"Fetching results dates from Yahoo for {len(syms)} symbols (about a minute)...")
+        print(refresh_earnings(conn, syms, force=True))
+    else:  # list
+        start = date.today() - timedelta(days=args.past)
+        ev = get_events(conn, start=start, end=date.today() + timedelta(days=args.days))
+        print(ev.to_string(index=False) if not ev.empty else "No events in that window.")
+    return 0
+
+
+def cmd_schedule(args, cfg) -> int:
+    import platform
+    import subprocess
+
+    from swing_agent.scheduling import instructions, windows_command
+
+    print(instructions(cfg.schedule.run_time_ist))
+    if args.install:
+        if platform.system() != "Windows":
+            print("\n--install only works on Windows. Add the cron line above with `crontab -e`.")
+            return 1
+        print("\nInstalling the scheduled task...")
+        return subprocess.call(windows_command(cfg.schedule.run_time_ist), shell=True)
+    return 0
 
 
 # ---------------------------------------------------------------- parser
@@ -305,11 +344,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--headless", action="store_true", help="Don't open a browser window")
     s.set_defaults(func=cmd_dashboard)
 
-    for name, ms, helptext in [
-        ("events", 6, "Manage the event calendar"),
-    ]:
-        s = sub.add_parser(name, help=f"{helptext} (milestone {ms})")
-        s.set_defaults(func=_not_yet(ms))
+    e = sub.add_parser("events", help="Event calendar (results dates, RBI, Budget, Fed...)")
+    esub = e.add_subparsers(dest="action", required=True)
+    s = esub.add_parser("add", help="Add one event")
+    s.add_argument("--date", required=True, help="YYYY-MM-DD")
+    s.add_argument("--symbol", required=True, help="NSE symbol, or ALL for market-wide events")
+    s.add_argument("--type", required=True, type=str.upper,
+                   choices=["RESULTS", "RBI", "BUDGET", "FED", "ELECTION", "OTHER"])
+    s.add_argument("--note")
+    s = esub.add_parser("list", help="Show events (default: last 7 and next 60 days)")
+    s.add_argument("--days", type=int, default=60)
+    s.add_argument("--past", type=int, default=7)
+    s = esub.add_parser("delete", help="Delete an event by id")
+    s.add_argument("id", type=int)
+    esub.add_parser("sync", help="Load data/events.csv into the database")
+    esub.add_parser("fetch", help="Fetch results dates from Yahoo now (best effort)")
+    e.set_defaults(func=cmd_events)
+
+    s = sub.add_parser("schedule", help="Show how to run `run` automatically on weekdays")
+    s.add_argument("--install", action="store_true", help="Windows only: create the scheduled task")
+    s.set_defaults(func=cmd_schedule)
+
     return p
 
 
@@ -322,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = load_config(args.config)
         return args.func(args, cfg)
-    except (ConfigError, WatchlistError, DatabaseError, NoDataError, TradeError, PortfolioError) as err:
+    except (ConfigError, WatchlistError, DatabaseError, NoDataError, TradeError, PortfolioError, EventError) as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

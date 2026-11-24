@@ -19,7 +19,7 @@ from . import db
 from .config import PROJECT_ROOT, Config
 from .data_fetcher import DataFetcher, UpdateReport
 from .data_sources import DataSource, get_source
-from .events import get_events, results_dates_by_symbol
+from .events import get_events, refresh_earnings, results_dates_by_symbol, sync_events_csv
 from .exit_manager import Alert, PositionStatus, check_position, sort_alerts
 from .indicators import add_all_indicators
 from .market_filter import compute_regime_series, regime_at, regime_change_message
@@ -176,9 +176,18 @@ def daily(
     """
     today = today or date.today()
     update: UpdateReport | None = None
+    event_warnings: list[str] = []
     if do_update:
         db.upsert_symbols(conn, load_watchlist(cfg.watchlist_path))
         update = DataFetcher(conn, source or get_source(cfg.data.source), cfg).update()
+        if cfg.data.fetch_results_dates and not update.offline:
+            note = refresh_earnings(conn, db.get_symbols(conn)["symbol"].tolist(), today)
+            log.info(note)
+            if "unavailable" in note:
+                event_warnings.append(note)
+    if persist:
+        _, problems = sync_events_csv(conn, cfg.resolve(cfg.data.events_file))
+        event_warnings += [f"{cfg.data.events_file} {p}" for p in problems]
 
     portfolio = build_portfolio(db.get_trades(conn), cfg.account.capital)
     market = load_market_data(conn, cfg, extra_symbols=list(portfolio.positions))
@@ -211,7 +220,7 @@ def daily(
         msg = regime_change_message(prev_regime, regime.regime)
         if msg:
             alerts.append(Alert("ALL", "REGIME_CHANGE", msg, regime.description))
-        warnings = _data_warnings(update, result, today)
+        warnings = _data_warnings(update, result, today) + event_warnings
         if update is not None:
             alerts += [Alert(sym, "DATA", f"{sym}: download failed ({why}).", "Skipped today.")
                        for sym, why in update.failed.items()]

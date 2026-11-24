@@ -9,3 +9,4 @@ reports/
 .streamlit/secrets.toml
 *.bak
 .playwright-mcp/
+data/.earnings_fetched

@@ -37,6 +37,7 @@ def demo_db(tmp_path, monkeypatch):
     from swing_agent.data_fetcher import DataFetcher
 
     DataFetcher(conn, src, cfg).update()
+    cfg.data.events_file = str(tmp_path / "events.csv")
     daily(conn, cfg, persist=True, reports_dir=tmp_path)
     last = pb.index[-1].date()
     log_buy(conn, cfg, "BBB", 900.0, 5, last - pd.Timedelta(days=30), stop=850.0)

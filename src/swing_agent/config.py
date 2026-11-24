@@ -46,6 +46,8 @@ class DataCfg(_Section):
     index_symbol: str
     vix_symbol: str
     refetch_overlap_days: int = Field(ge=1, le=60)
+    events_file: str = "data/events.csv"
+    fetch_results_dates: bool = True
 
 
 class MarketFilterCfg(_Section):
