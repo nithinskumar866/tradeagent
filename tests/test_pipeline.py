@@ -24,6 +24,7 @@ def _cfg(cfg, tmp_path):
     c.universe.watchlist_file = str(wl)
     c.data.events_file = str(tmp_path / "events.csv")
     c.data.fetch_results_dates = False
+    c.explainer.enabled = False
     return c
 
 

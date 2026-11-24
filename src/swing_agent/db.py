@@ -106,6 +106,7 @@ MIGRATIONS = [
     ("signals", "status", "TEXT"),
     ("signals", "status_note", "TEXT"),
     ("runs", "regime", "TEXT"),
+    ("signals", "explanation", "TEXT"),
 ]
 
 

@@ -142,7 +142,7 @@ def _signal_row(s: Signal) -> dict:
         "stop": s.stop, "target": s.target, "qty": s.qty, "risk_amount": s.risk_amount,
         "rr": s.rr, "score": s.score, "reasons_json": json.dumps(s.reasons, ensure_ascii=False),
         "warnings_json": json.dumps(s.warnings, ensure_ascii=False), "regime": None,
-        "status": s.status, "status_note": s.status_note,
+        "status": s.status, "status_note": s.status_note, "explanation": s.explanation,
     }
 
 
@@ -210,6 +210,13 @@ def daily(
         regime = result.regime
         prev_regime = db.previous_run_regime(conn, rd) or prev_day
         size_signals(result.signals, portfolio.capital, portfolio.available_cash, cfg, regime.risk_multiplier)
+        if cfg.explainer.enabled and result.signals:
+            from .explainer import explain_signals
+
+            texts, status = explain_signals(result.signals, regime, cfg)
+            log.info("Explainer: %s", status)
+            for s in result.signals:
+                s.explanation = texts.get(s.symbol)
 
         results_lookup = results_dates_by_symbol(conn)
         statuses = [

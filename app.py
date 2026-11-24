@@ -229,6 +229,10 @@ def page_today() -> None:
         st.dataframe(view, hide_index=True, use_container_width=True)
         for r in part.itertuples():
             with st.expander(f"{r.symbol} · {r.name or ''} · why and warnings"):
+                if isinstance(r.explanation, str) and r.explanation:
+                    st.info(r.explanation)
+                    st.caption("Explained by your local AI model from the facts below. The rules decided; "
+                               "the AI only explains.")
                 for reason in json.loads(r.reasons_json or "[]"):
                     st.markdown(f"- {reason}")
                 warns = json.loads(r.warnings_json or "[]")

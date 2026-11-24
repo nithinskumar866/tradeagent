@@ -154,6 +154,7 @@ class Signal:
     risk_amount: float | None = None
     est_costs: float | None = None
     signal_id: int | None = None   # set once stored in the signals table
+    explanation: str | None = None # optional plain-English text from the local LLM (v2)
 
     @property
     def entry_plan(self) -> float:

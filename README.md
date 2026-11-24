@@ -267,9 +267,25 @@ Every number the strategy uses lives in `config.yaml`. It is checked when any co
 | `costs` | **check these against your broker**: brokerage per order, STT, exchange, SEBI, stamp duty, GST, DP charge, slippage |
 | `backtest` | start date, in-sample end, starting capital |
 | `schedule` | `run_time_ist` used by `swing.py schedule` |
-| `explainer` | reserved for the optional local-LLM explainer (not built) |
+| `explainer` | optional plain-English explanations from a local Ollama model (see below) |
 
 Set `costs.brokerage_per_order: 0` if your broker charges nothing for delivery trades; it noticeably changes the backtest.
+
+### Optional: plain-English explanations with a local AI model
+
+If [Ollama](https://ollama.com) is installed and running, each signal in the report and on the dashboard's Today page also gets a 3–4 sentence explanation written by a local model. Nothing leaves your computer.
+
+```yaml
+explainer:
+  enabled: true
+  ollama_url: "http://localhost:11434"
+  model: "llama3.2:3b"     # any model you have pulled: `ollama pull llama3.1:8b` is better but slower
+```
+
+- **The rules decide; the model only explains.** It receives the signal's numbers and reason strings and is told not to change numbers or recommend anything different.
+- Every reply is checked. If it contains a number that isn't in the facts, or wording like "avoid" or "sell", it is thrown away and the rule-based reasons are shown instead.
+- If Ollama isn't running, the model isn't installed or a reply is too slow, the tool silently uses the rule-based reasons. A run never waits more than about 3 minutes for explanations (the first one is slow while the model loads).
+- Set `enabled: false` to switch it off.
 
 ## 11. Troubleshooting
 
@@ -296,7 +312,8 @@ reports/            daily reports, backtests, sweeps
 logs/               swing.log, scheduled_run.log
 scripts/            run_daily.bat (Windows), run_daily.sh (macOS/Linux)
 src/swing_agent/    the code: data_fetcher, indicators, market_filter, scanner, risk,
-                    exit_manager, costs, portfolio, backtest, metrics, events, report, pipeline
+                    exit_manager, costs, portfolio, backtest, metrics, events, report,
+                    explainer, pipeline
 tests/              offline tests on synthetic data
 ```
 

@@ -31,6 +31,8 @@ def signal_block(s: Signal) -> list[str]:
     if s.qty:
         lines.append(f"- Qty: {s.qty}   Position: {inr(s.qty * s.entry_plan, 0)}   "
                      f"Risk: {inr(s.risk_amount)}   Est. round-trip costs: {inr(s.est_costs)}")
+    if s.explanation:
+        lines.append(f"- In plain English (local AI, rules unchanged): {s.explanation}")
     lines.append("- Why:")
     lines += [f"  - {r}" for r in s.reasons]
     if s.warnings:

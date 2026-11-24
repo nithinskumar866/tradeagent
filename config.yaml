@@ -79,7 +79,7 @@ backtest:
 schedule:
   run_time_ist: "18:30"
 
-explainer:                    # v2
-  enabled: false
+explainer:                    # v2: optional plain-English explanations from a local Ollama model
+  enabled: true               # falls back to the rule-based reasons if Ollama isn't running
   ollama_url: "http://localhost:11434"
-  model: "llama3.1:8b"
+  model: "llama3.2:3b"        # any model you have pulled, e.g. llama3.1:8b (better, slower)
