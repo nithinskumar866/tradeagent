@@ -181,15 +181,31 @@ class Analysis:
     sizing: str = ""
 
 
-def clean_symbol(text: str) -> str:
-    """'tcs.ns ' → 'TCS'."""
+EXCHANGES = ("NSE", "BSE")
+
+
+def clean_symbol(text: str, exchange: str = "NSE") -> str:
+    """Normalise user input to the stored symbol key.
+
+    NSE: 'tcs.ns ' → 'TCS'. BSE: 'tcs' → 'TCS.BO' (Yahoo uses the trading symbol, not the scrip code).
+    A typed '.NS' / '.BO' suffix wins over the ``exchange`` choice.
+    """
     s = text.strip().upper()
-    for suffix in (".NS", ".BO"):
-        if s.endswith(suffix):
-            s = s[: -len(suffix)]
+    exchange = exchange.strip().upper()
+    if exchange not in EXCHANGES:
+        raise AnalyzeError(f"Exchange must be NSE or BSE (got {exchange!r}).")
+    if s.endswith(".NS"):
+        s, exchange = s[:-3], "NSE"
+    elif s.endswith(".BO"):
+        s, exchange = s[:-3], "BSE"
     if not s or not all(c.isalnum() or c in "&-_" for c in s):
-        raise AnalyzeError(f"{text!r} doesn't look like an NSE symbol (e.g. RELIANCE, TCS, M&M).")
-    return s
+        raise AnalyzeError(f"{text!r} doesn't look like a stock symbol (e.g. RELIANCE, TCS, M&M).")
+    return f"{s}.BO" if exchange == "BSE" else s
+
+
+def exchange_of(symbol: str) -> str:
+    """'TCS.BO' → 'BSE', anything else → 'NSE'."""
+    return "BSE" if symbol.upper().endswith(".BO") else "NSE"
 
 
 def _ensure_prices(conn: sqlite3.Connection, cfg: Config, sym: str, allow_download: bool, source) -> bool:
@@ -209,8 +225,9 @@ def _ensure_prices(conn: sqlite3.Connection, cfg: Config, sym: str, allow_downlo
     if sym not in rep.failed:
         _remember_symbol(conn, sym, source)
     if sym in rep.failed and db.last_price_date(conn, sym) is None:
-        raise AnalyzeError(f"Couldn't get prices for {sym} from Yahoo ({rep.failed[sym]}). Check the NSE symbol "
-                           "(e.g. TATAMOTORS is now TMPV) or your internet connection.")
+        raise AnalyzeError(f"Couldn't get prices for {sym} from Yahoo ({rep.failed[sym]}). Check the symbol and "
+                           "exchange (use the trading symbol, e.g. RELIANCE, even on BSE; numeric BSE codes don't "
+                           "work; TATAMOTORS is now TMPV) or your internet connection.")
     if cfg.data.fetch_results_dates and sym not in results_dates_by_symbol(conn):
         refresh_earnings(conn, [sym], force=True, update_marker=False)
     return True
@@ -281,6 +298,7 @@ def analyze_symbol(
     source=None,
     reports_dir: Path | None = None,
     capital_override: float | None = None,
+    exchange: str = "NSE",
 ) -> Analysis:
     """Run the full rule checklist and plan for one symbol on the latest trading day.
 
@@ -289,7 +307,7 @@ def analyze_symbol(
     """
     if capital_override is not None and capital_override <= 0:
         raise AnalyzeError("The what-if capital must be more than ₹0.")
-    sym = clean_symbol(symbol)
+    sym = clean_symbol(symbol, exchange)
     index = db.get_prices(conn, cfg.data.index_symbol)
     if index.empty:
         raise AnalyzeError("No Nifty data yet. Run `python swing.py init` first.")
@@ -361,6 +379,9 @@ def analyze_symbol(
     if sym in pf.positions:
         p = pf.positions[sym]
         held = f"You hold {p.qty} @ {inr(p.avg_entry)} (stop {inr(p.stop)}, target {inr(p.target)})."
+    if plan is not None and plan.est_costs and plan.qty and plan.est_costs >= plan.risk_amount:
+        warnings.append(f"Charges (~{inr(plan.est_costs)} round trip) are as big as or bigger than the "
+                        f"{inr(plan.risk_amount)} at risk: at this capital the trade can't pay off sensibly.")
     a = cfg.account
     limits = (f"(available cash {inr(cash, 0)}): risk up to {inr(capital * a.risk_per_trade_pct / 100 * mult, 0)} "
               f"per trade, max {inr(capital * a.max_position_pct / 100, 0)} in one stock.")
@@ -397,7 +418,8 @@ def add_to_watchlist(conn: sqlite3.Connection, cfg: Config, symbol: str, name: s
 
 def format_analysis(a: Analysis) -> str:
     """Markdown/terminal text for an analysis."""
-    title = f"# {a.symbol}" + (f" — {a.name}" if a.name else "") + f" ({a.sector})"
+    title = (f"# {a.symbol} [{exchange_of(a.symbol)}]" + (f" — {a.name}" if a.name else "")
+             + f" ({a.sector})")
     out = [title, f"Data as of {a.asof} · close {inr(a.close)} · market {a.regime.regime}"
            + (" · downloaded just now" if a.downloaded else ""), ""]
     if a.held:

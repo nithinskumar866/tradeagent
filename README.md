@@ -7,6 +7,29 @@ A free, local, rule-based swing trading assistant for Indian stocks. Every eveni
 
 **Read the backtest section before trading any signal.** With the default settings, the strategy *lost money* in the 2015–2026 backtest while Nifty rose.
 
+### Is this AI or machine learning?
+
+**No. It's a rule-based system.** Every decision (which stock, buy zone, stop, target, quantity, when to exit) comes from fixed, readable rules and the numbers in `config.yaml`. Nothing is trained, nothing "learns" from data, and the same inputs always give the same output.
+
+| Question | Answer |
+|---|---|
+| Does it need an AI model to work? | **No.** Everything runs without one. |
+| Is there any AI at all? | One **optional** extra: a small local language model (via [Ollama](https://ollama.com)) can rewrite each signal's reasons as a short paragraph. It only *explains*; it can't change a number or a decision, and every reply is checked. If it's off or missing, you lose nothing but that paragraph. |
+| Does it need the internet or paid APIs? | Only free Yahoo Finance data (and optionally the niftyindices.com list). No keys, no accounts, no broker connection. |
+| What "algorithms" does it use? | Classic technical analysis (EMA, RSI, ATR, relative strength), a fixed checklist, a ranking formula, fixed-fractional position sizing and an event-driven backtester. All are explained in [section 9](#9-how-it-works-the-algorithm). |
+
+### What it looks like
+
+| Today's signals | Analyze any stock |
+|---|---|
+| ![Today page: market regime banner, exit alerts and TAKE signals](docs/screenshots/today.png) | ![Analyze page: exchange dropdown, symbol, what-if capital](docs/screenshots/analyze.png) |
+| **Rule checklist** | **Trade plan and target date** |
+| ![Every buy rule as pass/fail with the numbers](docs/screenshots/analyze_checklist.png) | ![Buy zone, stop, target, quantity, approximate target date](docs/screenshots/analyze_plan.png) |
+| **Chart with plan levels** | **Backtest: strategy vs Nifty** |
+| ![Candles, EMAs, buy zone, stop and target lines](docs/screenshots/analyze_chart.png) | ![Equity curve of the strategy against Nifty buy-and-hold](docs/screenshots/backtest_equity.png) |
+
+<sub>Screenshots use a demo copy of the data with ₹1,00,000 capital and no trades.</sub>
+
 ---
 
 ## Contents
@@ -19,10 +42,11 @@ A free, local, rule-based swing trading assistant for Indian stocks. Every eveni
 6. [Scheduling the daily run](#6-scheduling-the-daily-run)
 7. [Dashboard](#7-dashboard)
 8. [Backtesting](#8-backtesting)
-9. [How the strategy works](#9-how-the-strategy-works)
-10. [Configuration (`config.yaml`)](#10-configuration-configyaml)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Project layout and tests](#12-project-layout-and-tests)
+9. [How it works: the algorithm](#9-how-it-works-the-algorithm)
+10. [Architecture](#10-architecture)
+11. [Configuration (`config.yaml`)](#11-configuration-configyaml)
+12. [Troubleshooting](#12-troubleshooting)
+13. [Project layout and tests](#13-project-layout-and-tests)
 
 ---
 
@@ -223,12 +247,13 @@ This prints an address like `http://192.168.1.20:8501`; open it on any device on
 | Page | What it shows |
 |---|---|
 | **Today** | Market regime banner (green / amber / red), exit alerts, TAKE and WATCH tables. Expand a signal for its reasons and warnings; **Log this buy** fills in the buy form. |
+| **Analyze** | Pick NSE or BSE, type any symbol: rule checklist, trade plan (real or hypothetical), approximate target date, chart. Optional *what if my capital were* box. |
 | **My positions** | Capital, cash, P&L in ₹, % and R, status, stop, target, days held. Log a sell, confirm a breakeven stop move, view or fix the trade log. |
 | **Chart** | Candles with EMA 20/50/200, volume and RSI panels, and entry/stop/target lines when a signal or position exists. |
 | **Backtest** | Run a new backtest or open a past one: metrics, equity vs Nifty, drawdown, R-multiple distribution, yearly table, trades. |
 | **Journal** | Your real closed trades with win rate, expectancy (R) and net P&L. |
 | **Events** | View, add, delete and import calendar entries. |
-| **Settings** | Your `config.yaml` and whether it is valid. |
+| **Settings** | Change your capital; view `config.yaml` and whether it is valid. |
 
 The dashboard only reads the local database. It downloads data only when you click **Update data now** (or **Re-scan**, which scans without downloading).
 
@@ -252,6 +277,8 @@ Output goes to `reports/backtest_<timestamp>/`: `summary.md`, `trades.csv`, `equ
 | Max drawdown | −36.8% | −38.4% |
 | Trades / win rate / expectancy | 820 / 33% / −0.05R | |
 
+![Backtest page: in-sample, out-of-sample and full-period metrics](docs/screenshots/backtest.png)
+
 Before charges the rules had a thin edge (about +0.10R per trade); charges on small positions (about 0.15R per trade at ₹1 lakh capital with ₹20 brokerage) turned it negative. Trend exits (close below the 50 EMA) were the biggest losers. A small sweep of nearby settings lost money in every combination. Treat the daily signals as a starting point for your own judgement, not as a proven system.
 
 **Parameter sensitivity:**
@@ -269,11 +296,40 @@ Every summary repeats these warnings:
 - Past performance doesn't guarantee future results.
 - Don't keep tuning parameters until the backtest looks good. Judge any change on its out-of-sample results.
 
-## 9. How the strategy works
+## 9. How it works: the algorithm
 
-Signals are computed on the close of day T; entries happen on day T+1.
+The whole system is a fixed pipeline of rules. Signals are computed on the **close of day T**; you act on **day T+1**. Every number below is a setting in `config.yaml`.
 
-**Market regime** (Nifty 50 and India VIX):
+```mermaid
+flowchart LR
+    A[Daily prices<br/>Nifty 100 + Nifty + VIX] --> B[Indicators<br/>EMA, RSI, ATR, RS]
+    B --> C{Market regime<br/>allows buys?}
+    C -- no --> X[No new buys today]
+    C -- yes --> D[Entry checklist<br/>per stock]
+    D --> E[Trade plan<br/>zone, stop, target]
+    E --> F[Rank by score]
+    F --> G[Size by risk<br/>TAKE / WATCH]
+    H[Your logged trades] --> I[Exit checks]
+    G --> R[Report + dashboard]
+    I --> R
+```
+
+### Step 1. Indicators
+
+Calculated per stock from daily open/high/low/close/volume. All of them are *causal*: the value on a day uses only that day and earlier days, so the backtest can't peek into the future.
+
+| Indicator | Formula (plain words) | Used for |
+|---|---|---|
+| **EMA 20 / 50 / 200** | Exponential moving average of the close; recent days weigh more (`span = n`) | trend direction and support |
+| **RSI 14** (Wilder) | 100 − 100 / (1 + average gain ÷ average loss), smoothed over 14 days | "has the dip cooled off?" |
+| **ATR 14** (Wilder) | average of the true range (the biggest of high−low, \|high−prev close\|, \|low−prev close\|) | how far the stock typically moves in a day |
+| **Average traded value** | 20-day mean of close × volume, in ₹ crore | liquidity filter |
+| **Relative strength** | stock's 63-day return − Nifty's 63-day return, in % points | ranking |
+| **Volume vs average** | today's volume ÷ the previous 20 days' average | ranking bonus |
+
+### Step 2. Market regime (the "traffic light")
+
+Checked first, from Nifty 50 and India VIX:
 
 | Regime | Condition | Effect |
 |---|---|---|
@@ -282,17 +338,231 @@ Signals are computed on the close of day T; entries happen on day T+1.
 | 🔴 BEARISH | Nifty < 200 EMA | no new entries |
 | 🔴 FEAR | VIX > 25, or VIX up > 30% in 5 days | no new entries |
 
-**Entry rules** (all must hold on day T): price ≥ ₹100, 20-day average traded value ≥ ₹20 crore, 250+ days of history; uptrend (close > 200 EMA, 50 EMA > 200 EMA, 200 EMA rising); a 3–12% pullback from the 20-day high; a recent low touching the 20 EMA while closing above the 50 EMA; RSI dipped to 35–50 and turning up; a bullish trigger (close above yesterday's high and the 20 EMA, and above the open); no results within 5 trading days; regime allows entries.
+### Step 3. Entry checklist ("pullback in an uptrend")
 
-**Ranking:** score = relative strength vs Nifty over 63 days + 2 × bonus points (volume dried up on the pullback; volume above average on the trigger day). The top signals fill your free position slots (TAKE), respecting max 2 per sector; the rest are WATCH.
+A stock is a setup only if **every** line holds on day T:
 
-**Trade plan:** buy zone = day-T close to day-T high + 0.5% (next day only). Stop = lowest low of 5 days − 0.5%, at least 1 ATR below entry; signals needing a stop wider than 8% are rejected. Target = entry + 2R. Quantity risks 1% of capital (0.5% in CAUTION), capped at 20% of capital per stock and by available cash. Each plan shows estimated round-trip charges.
+1. **Tradeable:** price ≥ ₹100, 20-day average traded value ≥ ₹20 crore, 250+ days of history.
+2. **Uptrend:** close > 200 EMA, 50 EMA > 200 EMA, and the 200 EMA is rising.
+3. **Pullback:** 3–12% below its 20-day high (a dip, not a crash).
+4. **Support held:** a low in the last few days touched the 20 EMA, and the close is still above the 50 EMA.
+5. **RSI reset:** RSI dipped into 35–50 recently and is now turning up.
+6. **Bullish trigger:** close above yesterday's high, above the 20 EMA, and above today's open.
+7. **No results soon:** no results date within 5 trading days.
+8. **Regime allows entries** (step 2).
 
-**Exit checks** for open positions, in priority order: stop hit → target hit → move stop to breakeven (once up 1R) → close below 50 EMA → 20 trading days without working → results within 3 days → hold. In BEARISH or FEAR markets every position also gets "Market weak. Consider tightening stops."
+The idea: buy a strong stock after a short, orderly dip, on the day it starts to bounce.
 
-Every signal comes with plain-English reasons, e.g. "Pulled back 6.2% from 20-day high" and "RSI dipped to 41 and is turning up".
+### Step 4. Trade plan
 
-## 10. Configuration (`config.yaml`)
+- **Buy zone** = day-T close to day-T high + 0.5%, valid on the next day only. If the stock opens above it, skip it.
+- **Stop-loss** = the lowest low of the last 5 days − 0.5%, but at least 1 × ATR below entry. If that stop is more than 8% away, the signal is rejected.
+- **R** (risk per share) = entry − stop. **Target** = entry + 2R.
+- **Estimated charges** for the round trip (brokerage, STT, exchange, SEBI, stamp duty, GST, DP charge).
+
+### Step 5. Ranking and sizing
+
+- **Score** = relative strength vs Nifty + 2 × bonus points (1 point for volume drying up during the pullback, 1 for above-average volume on the trigger day).
+- The best scores fill your **free position slots** (TAKE), with at most 2 stocks per sector. The rest are WATCH.
+- **Quantity** (fixed-fractional sizing):
+
+  ```
+  risk budget = capital × 1%          (× 0.5 in CAUTION)
+  quantity    = floor(risk budget ÷ R)
+  then capped so one stock ≤ 20% of capital, and by the cash you have free
+  ```
+
+  So a stop-out loses about 1% of your capital, whatever the stock's price.
+
+### Step 6. Exit checks for positions you hold
+
+Run every evening on the trades you logged, first match wins:
+
+| Priority | Alert | When |
+|---|---|---|
+| 1 | STOP_HIT | low ≤ stop |
+| 2 | TARGET_HIT | high ≥ target |
+| 3 | MOVE_STOP | close is 1R or more above entry and the stop is still below entry → move it to breakeven |
+| 4 | TREND_EXIT | close below the 50 EMA |
+| 5 | TIME_EXIT | held 20 trading days (the trade isn't working) |
+| 6 | RESULTS_SOON | results within 3 trading days |
+| – | HOLD | none of the above |
+
+In BEARISH or FEAR markets every position also gets "Market weak. Consider tightening stops."
+
+### Step 7. Approximate target date
+
+```
+fastest days  = ceil((target − entry) ÷ ATR)          the stock's own speed
+history       = how long winning backtest trades took  (25th, 50th, 75th percentile)
+window        = history percentiles, never faster than "fastest", never past the time stop
+dates         = counted in weekdays from the next trading day
+```
+
+Without a backtest it falls back to the ATR estimate only (×1, ×2, ×3).
+
+### Step 8. Backtester
+
+An **event-driven day-by-day replay** of the same functions the live scan uses (no separate "backtest version" of the rules):
+
+- each day: check exits for open positions, then scan, rank and size new signals with the cash available that day;
+- entries fill at the next day's open, but only inside the buy zone; stops, targets and gaps fill realistically (stop first if both hit the same day);
+- every fill pays charges and 0.1% slippage;
+- results are split into **in-sample** (to end-2021) and **out-of-sample** (2022 on) and compared with Nifty buy-and-hold.
+
+### Step 9. Optional AI explanation (not part of the decision)
+
+If enabled, the signal's numbers and reasons go to a local Ollama model with the instruction "explain, don't change". The reply is rejected (and the plain reasons shown instead) if it contains any number that isn't in the facts, or advice words like "avoid" or "sell".
+
+![A TAKE signal expanded: the local AI's paragraph above the rule-based reasons](docs/screenshots/today_signal.png)
+
+Every signal also carries its plain-English reasons, e.g. "Pulled back 6.2% from 20-day high" and "RSI dipped to 41 and is turning up".
+
+## 10. Architecture
+
+### Big picture
+
+```mermaid
+flowchart TB
+    subgraph Outside["Outside (free, read-only)"]
+        Y[Yahoo Finance<br/>via yfinance]
+        N[niftyindices.com<br/>Nifty 100 list]
+        O[Ollama<br/>local AI, optional]
+    end
+
+    subgraph You["You"]
+        CLI[swing.py<br/>command line]
+        WEB[app.py<br/>Streamlit dashboard]
+        SCH[Task Scheduler / cron<br/>daily run]
+        CFG[config.yaml]
+        CSV[data/events.csv]
+    end
+
+    subgraph Core["src/swing_agent (the engine)"]
+        PIPE[pipeline.daily]
+        DATA[data_fetcher<br/>+ data_sources]
+        IND[indicators]
+        MKT[market_filter]
+        SCAN[scanner]
+        RISK[risk + costs]
+        PF[portfolio + trading]
+        EXIT[exit_manager]
+        ANA[analyze]
+        BT[backtest + metrics]
+        EVT[events]
+        EXP[explainer]
+        REP[report]
+    end
+
+    DB[(SQLite<br/>data/market.db)]
+    OUT[reports/*.md<br/>backtest folders<br/>logs/]
+
+    SCH --> CLI
+    CLI --> PIPE
+    WEB --> PIPE
+    WEB --> ANA
+    CLI --> ANA
+    CLI --> BT
+    WEB --> BT
+    CFG --> Core
+    CSV --> EVT
+    PIPE --> DATA --> Y
+    DATA --> N
+    PIPE --> EVT
+    PIPE --> SCAN
+    SCAN --> IND
+    SCAN --> MKT
+    PIPE --> RISK
+    PIPE --> EXIT
+    PIPE --> EXP --> O
+    PIPE --> REP --> OUT
+    ANA --> SCAN
+    BT --> SCAN
+    BT --> EXIT
+    BT --> RISK
+    Core <--> DB
+    PF <--> DB
+```
+
+**Three ways in, one engine.** The command line, the dashboard and the scheduled task all call the same functions in `src/swing_agent`. The dashboard has no logic of its own; it displays what the engine returns.
+
+### What happens in one daily run
+
+```mermaid
+sequenceDiagram
+    participant T as Scheduler / you
+    participant P as pipeline.daily
+    participant D as data_fetcher
+    participant S as scanner
+    participant R as risk
+    participant X as exit_manager
+    participant DB as SQLite
+    T->>P: swing.py run
+    P->>D: download new bars (incremental)
+    D->>DB: save prices
+    P->>P: weekly results dates, sync events.csv
+    P->>S: regime + checklist for every stock
+    S-->>P: signals with plans and scores
+    P->>R: rank, size (TAKE / WATCH)
+    P->>X: check your open positions
+    X-->>P: exit alerts
+    P->>P: optional AI explanation, target dates
+    P->>DB: save run, signals, alerts (replaces same day)
+    P->>T: reports/YYYY-MM-DD.md
+```
+
+### Modules
+
+| Layer | Module | Job |
+|---|---|---|
+| **Entry points** | `swing.py` | every command: init, update, run, scan, analyze, trade, capital, backtest, events, schedule, dashboard |
+| | `app.py` | the Streamlit dashboard |
+| **Orchestration** | `pipeline.py` | the daily run, step by step (above) |
+| | `scheduling.py` | builds the Task Scheduler / cron commands |
+| **Data** | `data_sources/` | pluggable price source (`base.py` interface, `yfinance_source.py`) |
+| | `data_fetcher.py` | incremental download, cleaning, bad-bar removal |
+| | `watchlist.py` | the Nifty 100 list (CSV, refresh from niftyindices.com) |
+| | `events.py` | results dates and market events (CSV sync, Yahoo fetch) |
+| | `db.py` | SQLite schema, migrations, all reads and writes |
+| **Strategy** | `indicators.py` | EMA, RSI, ATR, traded value, relative strength |
+| | `market_filter.py` | market regime |
+| | `scanner.py` | entry checklist, trade plan, reasons, score, ranking |
+| | `risk.py` | position sizing |
+| | `costs.py` | Indian delivery charges and slippage |
+| | `exit_manager.py` | exit rules for open positions |
+| **Your account** | `portfolio.py` | rebuilds positions, cash and P&L from the trade log (FIFO) |
+| | `trading.py` | logging buys, sells, stop moves |
+| **Tools** | `analyze.py` | any-stock analysis, what-if capital, target-date estimate |
+| | `backtest.py`, `metrics.py` | the replay and its statistics |
+| | `explainer.py` | optional Ollama explanation with faithfulness checks |
+| | `report.py`, `fmt.py` | Markdown report, ₹ formatting with Indian grouping |
+| | `config.py`, `logging_setup.py` | validated settings, log files |
+
+### Data storage (`data/market.db`)
+
+| Table | Holds |
+|---|---|
+| `symbols` | watchlist stocks: symbol, name, sector, active flag |
+| `prices` | daily OHLCV bars per symbol (about 12 years) |
+| `events` | results dates and market-wide events |
+| `runs` | one row per daily run: date, status, last data date, regime |
+| `signals` | each run's TAKE/WATCH signals with plan, reasons, explanation, target date |
+| `alerts` | each run's exit alerts |
+| `trades` | your logged buys and sells (the source of truth for positions) |
+
+New columns are added by small migrations on start, so an old database keeps working.
+
+### Design decisions
+
+- **Same code for live and backtest.** `scanner`, `risk`, `costs` and `exit_manager` are shared, so the backtest tests exactly what you'd trade.
+- **No look-ahead.** Indicators are causal; the backtest only sees data up to each replayed day.
+- **Everything configurable, everything validated.** A wrong value in `config.yaml` stops the program with a message naming the field.
+- **Your trade log is the truth.** Positions, cash and capital are always recomputed from it; nothing is stored twice.
+- **Offline-first.** If a download fails, cached data is used with a warning. The AI explainer fails silently back to plain reasons.
+- **Never touches a broker.** It can't place, change or see real orders.
+- **Tested offline.** About 150 tests run on synthetic price data, including the dashboard pages.
+
+## 11. Configuration (`config.yaml`)
 
 Every number the strategy uses lives in `config.yaml`. It is checked when any command starts; a bad value stops with a message naming the field (e.g. `entry.pullback_min_pct must be smaller than pullback_max_pct`).
 
@@ -327,7 +597,7 @@ explainer:
 - If Ollama isn't running, the model isn't installed or a reply is too slow, the tool silently uses the rule-based reasons. A run never waits more than about 3 minutes for explanations (the first one is slow while the model loads).
 - Set `enabled: false` to switch it off.
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 | Problem | What to do |
 |---|---|
@@ -339,22 +609,21 @@ explainer:
 | `Invalid config.yaml` | The message names the field and the problem. |
 | Need detail | Everything is logged to `logs/swing.log`; scheduled runs also write `logs/scheduled_run.log`. |
 
-To experiment without touching your real data, copy `data/market.db` and set `SWING_AGENT_DB` to the copy's path before running commands.
+To experiment without touching your real data, copy `data/market.db` and set `SWING_AGENT_DB` to the copy's path before running commands. `SWING_AGENT_CONFIG` does the same for a copy of `config.yaml`, and `SWING_AGENT_REPORTS` for the reports folder.
 
-## 12. Project layout and tests
+## 13. Project layout and tests
 
 ```
-swing.py            command-line entry point
-app.py              Streamlit dashboard
-config.yaml         all settings
+swing.py            command-line entry point (every command)
+app.py              Streamlit dashboard (8 pages)
+config.yaml         all settings, validated on start
 data/               market.db, watchlists/nifty100.csv, events.csv
 reports/            daily reports, backtests, sweeps
 logs/               swing.log, scheduled_run.log
+docs/screenshots/   images used in this README
 scripts/            run_daily.bat (Windows), run_daily.sh (macOS/Linux)
-src/swing_agent/    the code: data_fetcher, indicators, market_filter, scanner, risk,
-                    exit_manager, costs, portfolio, backtest, metrics, events, report,
-                    explainer, pipeline
-tests/              offline tests on synthetic data
+src/swing_agent/    the code; see "Modules" in section 10
+tests/              offline tests on synthetic data (no internet)
 ```
 
 Run the tests (no internet needed):

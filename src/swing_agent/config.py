@@ -7,6 +7,7 @@ clear, human-readable message (``ConfigError``) on bad values.
 from __future__ import annotations
 
 from datetime import date
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -14,7 +15,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG_PATH: Path = PROJECT_ROOT / "config.yaml"
+# Override with the SWING_AGENT_CONFIG environment variable (e.g. a demo or experiment config).
+DEFAULT_CONFIG_PATH: Path = Path(os.environ.get("SWING_AGENT_CONFIG") or PROJECT_ROOT / "config.yaml")
 
 
 class ConfigError(Exception):

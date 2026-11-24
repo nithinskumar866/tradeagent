@@ -361,31 +361,38 @@ def page_analyze() -> None:
     from swing_agent.analyze import AnalyzeError, add_to_watchlist, analyze_symbol
 
     st.header("Analyze a stock")
-    st.caption("Type any NSE symbol. You get every buy rule as pass/fail with the numbers, a trade plan, and an "
+    st.caption("Pick NSE or BSE and type a symbol. You get every buy rule as pass/fail with the numbers, a trade plan, and an "
                "approximate target date. Stocks outside your watchlist are downloaded when you click Analyze.")
     with st.form("analyze_form"):
-        c1, c2, c3 = st.columns([3, 2, 1])
-        text = c1.text_input("NSE symbol", value=st.session_state.get("an_sym", ""),
-                             placeholder="e.g. TCS, RELIANCE, M&M, IRCTC")
+        c0, c1 = st.columns([1, 3])
+        c2, c3 = st.columns([3, 1])
+        exch = c0.selectbox("Exchange", ["NSE", "BSE"],
+                            index=["NSE", "BSE"].index(st.session_state.get("an_exch", "NSE")))
+        text = c1.text_input("Symbol", value=st.session_state.get("an_sym", ""),
+                             placeholder="e.g. TCS, RELIANCE, M&M (trading symbol, also for BSE)")
         whatif = c2.number_input("What if my capital were (₹)", min_value=0.0, step=10000.0, format="%.0f",
                                  value=float(st.session_state.get("an_cap", 0.0)),
                                  help=f"Leave at 0 to use your saved capital ({inr(cfg.account.capital, 0)}). "
                                       "This only changes this analysis, not your saved capital.")
-        c3.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+        c3.markdown("<div style='height:1.9rem'></div>", unsafe_allow_html=True)
         if c3.form_submit_button("Analyze", use_container_width=True) and text.strip():
             st.session_state["an_sym"] = text.strip()
             st.session_state["an_cap"] = whatif
+            st.session_state["an_exch"] = exch
     sym = st.session_state.get("an_sym")
     cap = st.session_state.get("an_cap") or None
     if not sym:
         return
     with st.spinner(f"Analysing {sym}…"):
         try:
-            a = analyze_symbol(conn(), cfg, sym, capital_override=cap)
+            a = analyze_symbol(conn(), cfg, sym, capital_override=cap,
+                               exchange=st.session_state.get("an_exch", "NSE"))
         except AnalyzeError as err:
             st.error(str(err))
             return
-    st.subheader(f"{a.symbol}" + (f" — {a.name}" if a.name else "") + f" ({a.sector})")
+    from swing_agent.analyze import exchange_of
+
+    st.subheader(f"{a.symbol} [{exchange_of(a.symbol)}]" + (f" — {a.name}" if a.name else "") + f" ({a.sector})")
     st.caption(f"Data as of {a.asof} · close {inr(a.close)} · market {a.regime.regime}"
                + (" · downloaded just now" if a.downloaded else ""))
     if a.held:
@@ -405,15 +412,16 @@ def page_analyze() -> None:
         if p.stop is None:
             st.caption(p.note)
         else:
-            m = st.columns(5)
+            m = st.columns(3) + st.columns(3)   # two rows so long ₹ values aren't cut off
             if p.buy_zone:
-                m[0].metric("Buy zone", f"{inr(p.buy_zone[0], 0)}–{inr(p.buy_zone[1], 0)}")
+                m[0].metric("Buy from", inr(p.buy_zone[0]), "next day only", delta_color="off", delta_arrow="off")
+                m[1].metric("Buy up to", inr(p.buy_zone[1]), "skip if it opens above", delta_color="off", delta_arrow="off")
             else:
                 m[0].metric("Entry", inr(p.entry))
-            m[1].metric("Stop-loss", inr(p.stop), f"-{p.stop_pct:.1f}%", delta_color="off")
-            m[2].metric("Target (2R)", inr(p.target))
-            m[3].metric("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", delta_color="off")
-            m[4].metric("₹ at risk", inr(p.risk_amount, 0))
+            m[2].metric("Stop-loss", inr(p.stop), f"-{p.stop_pct:.1f}%", delta_color="off")
+            m[3].metric("Target (2R)", inr(p.target))
+            m[4].metric("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", delta_color="off", delta_arrow="off")
+            m[5].metric("₹ at risk", inr(p.risk_amount, 0))
             (st.warning if cap else st.caption)(a.sizing)
             if p.note:
                 st.caption(p.note)

@@ -272,7 +272,7 @@ def cmd_analyze(args, cfg) -> int:
     conn = db.connect()
     try:
         a = analyze_symbol(conn, cfg, args.symbol, allow_download=not args.no_download,
-                           capital_override=args.capital)
+                           capital_override=args.capital, exchange=args.exchange)
     except AnalyzeError as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
@@ -434,7 +434,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_capital)
 
     s = sub.add_parser("analyze", help="Analyse any NSE stock: rule checklist, plan, target date")
-    s.add_argument("symbol", help="NSE symbol, e.g. TCS, RELIANCE, M&M")
+    s.add_argument("symbol", help="Trading symbol, e.g. TCS, RELIANCE, M&M (same symbol for BSE)")
+    s.add_argument("--exchange", type=str.upper, choices=["NSE", "BSE"], default="NSE",
+                   help="Stock exchange (default NSE). TCS.BO / TCS.NS also work.")
     s.add_argument("--no-download", action="store_true", help="Use stored prices only (offline)")
     s.add_argument("--add", action="store_true", help="Also add it to the watchlist for the daily scan")
     s.add_argument("--capital", type=float, metavar="RUPEES",

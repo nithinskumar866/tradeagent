@@ -44,6 +44,11 @@ def setup_db(conn, cfg, tmp_path):
 def test_clean_symbol():
     assert clean_symbol(" tcs.ns ") == "TCS"
     assert clean_symbol("m&m") == "M&M"
+    assert clean_symbol("tcs", "bse") == "TCS.BO"
+    assert clean_symbol("TCS.BO") == "TCS.BO"            # typed suffix wins
+    assert clean_symbol("TCS.NS", "BSE") == "TCS"
+    with pytest.raises(AnalyzeError, match="NSE or BSE"):
+        clean_symbol("TCS", "NYSE")
     with pytest.raises(AnalyzeError):
         clean_symbol("TCS; drop table")
 
