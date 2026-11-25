@@ -25,7 +25,7 @@ from .fmt import inr
 from .indicators import add_all_indicators
 from .market_filter import RegimeState, compute_regime_series, regime_at
 from .portfolio import build_portfolio
-from .risk import position_size
+from .risk import position_size, sizing_steps
 from .scanner import Signal, evaluate_row, plan_trade, setup_frame
 
 log = logging.getLogger(__name__)
@@ -156,6 +156,7 @@ class Plan:
     eta: TargetETA | None
     note: str = ""
     buy_zone: tuple[float, float] | None = None
+    qty_math: list[str] = field(default_factory=list)   # how the quantity was worked out
 
 
 @dataclass
@@ -340,7 +341,7 @@ def analyze_symbol(
     capital, cash = pf.capital, pf.available_cash
     if capital_override is not None:
         capital = float(capital_override)
-        cash = max(0.0, capital - pf.invested)
+        cash = capital   # what-if = "if I had this much to trade with", all of it free
     hist = target_history(reports_dir)
     warnings: list[str] = []
     if asof < index.index[-1].date():
@@ -356,7 +357,8 @@ def analyze_symbol(
         plan = Plan("SIGNAL", sig.entry_plan, sig.stop, sig.target, sig.r, sig.stop_pct, size.qty, size.risk_amount,
                     round_trip_costs(sig.entry_plan, sig.target, size.qty, cfg.costs) if size.qty else None,
                     estimate_target(sig.entry_plan, sig.target, sig.atr, asof, cfg, hist),
-                    note=size.reason or "", buy_zone=(sig.buy_zone_low, sig.buy_zone_high))
+                    note=size.reason or "", buy_zone=(sig.buy_zone_low, sig.buy_zone_high),
+                    qty_math=sizing_steps(sig.entry_plan, sig.stop, capital, cash, cfg, mult, regime.regime))
         warnings += sig.warnings
     else:
         entry = float(row["close"])
@@ -369,7 +371,8 @@ def analyze_symbol(
             plan = Plan("HYPOTHETICAL", entry, tp.stop, tp.target, tp.r, tp.stop_pct, size.qty, size.risk_amount,
                         round_trip_costs(entry, tp.target, size.qty, cfg.costs) if size.qty else None,
                         estimate_target(entry, tp.target, float(row["atr"]), asof, cfg, hist),
-                        note=size.reason or "")
+                        note=size.reason or "",
+                        qty_math=sizing_steps(entry, tp.stop, capital, cash, cfg, mult, regime.regime))
         if sig is None and bool(row["setup"]) and why:  # passed the chart rules but was rejected
             warnings.append(f"Rules rejected it: {why}.")
         if not regime.allows_entries:
@@ -386,7 +389,7 @@ def analyze_symbol(
     limits = (f"(available cash {inr(cash, 0)}): risk up to {inr(capital * a.risk_per_trade_pct / 100 * mult, 0)} "
               f"per trade, max {inr(capital * a.max_position_pct / 100, 0)} in one stock.")
     if capital_override is not None:
-        sizing = (f"WHAT-IF: sized as if your capital were {inr(capital, 0)} {limits} "
+        sizing = (f"WHAT-IF: sized as if you had {inr(capital, 0)} to trade with, all of it free {limits} "
                   f"Your saved capital ({inr(pf.capital, 0)}) is unchanged.")
     else:
         sizing = (f"Sized for your capital {inr(capital, 0)} {limits} "
@@ -451,6 +454,8 @@ def format_analysis(a: Analysis) -> str:
             out.append(f"- {p.note}")
     if a.sizing:
         out += ["", f"_{a.sizing}_"]
+    if p is not None and p.qty_math:
+        out += ["", "How the quantity was worked out:"] + [f"  {line}" for line in p.qty_math]
     if a.warnings:
         out += ["", "## Warnings"] + [f"- {w}" for w in a.warnings]
     if not a.in_watchlist:

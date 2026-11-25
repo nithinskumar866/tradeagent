@@ -370,7 +370,7 @@ def page_analyze() -> None:
                             index=["NSE", "BSE"].index(st.session_state.get("an_exch", "NSE")))
         text = c1.text_input("Symbol", value=st.session_state.get("an_sym", ""),
                              placeholder="e.g. TCS, RELIANCE, M&M (trading symbol, also for BSE)")
-        whatif = c2.number_input("What if my capital were (₹)", min_value=0.0, step=10000.0, format="%.0f",
+        whatif = c2.number_input("What if my capital were (₹)", min_value=0.0, step=1000.0, format="%.0f",
                                  value=float(st.session_state.get("an_cap", 0.0)),
                                  help=f"Leave at 0 to use your saved capital ({inr(cfg.account.capital, 0)}). "
                                       "This only changes this analysis, not your saved capital.")
@@ -423,6 +423,11 @@ def page_analyze() -> None:
             m[4].metric("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", delta_color="off", delta_arrow="off")
             m[5].metric("₹ at risk", inr(p.risk_amount, 0))
             (st.warning if cap else st.caption)(a.sizing)
+            if p.qty_math:
+                with st.expander("How the quantity was worked out", expanded=True):
+                    st.markdown("\n".join(p.qty_math[:3]))
+                    st.markdown(p.qty_math[3])
+                    st.caption(p.qty_math[4])
             if p.note:
                 st.caption(p.note)
             if p.eta:
@@ -641,8 +646,8 @@ def page_settings() -> None:
                "calculated from it (plus your realised profit or loss).")
     with st.form("capital_form"):
         c1, c2 = st.columns([3, 1])
-        amount = c1.number_input("Starting capital (₹)", min_value=1000.0, value=float(cfg.account.capital),
-                                 step=10000.0, format="%.0f")
+        amount = c1.number_input("Starting capital (₹)", min_value=1.0, value=float(cfg.account.capital),
+                                 step=1000.0, format="%.0f", help="Any amount above ₹0.")
         if c2.form_submit_button("Save", use_container_width=True):
             try:
                 new = set_capital(amount)

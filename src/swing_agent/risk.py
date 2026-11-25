@@ -62,6 +62,40 @@ def position_size(
     return SizeResult(qty, qty * per_share, budget, capped, None)
 
 
+def sizing_steps(entry: float, stop: float, capital: float, available_cash: float, cfg: Config,
+                 risk_multiplier: float = 1.0, regime: str | None = None) -> list[str]:
+    """The quantity worked out step by step in plain words (same maths as ``position_size``)."""
+    from .fmt import inr
+
+    a = cfg.account
+    size = position_size(entry, stop, capital, available_cash, cfg, risk_multiplier)
+    per_share = entry - stop
+    if per_share <= 0 or entry <= 0:
+        return ["No valid stop below the entry, so no quantity."]
+    mult = f" × {risk_multiplier:g} ({regime} market)" if risk_multiplier != 1 else ""
+    budget = size.risk_budget
+    by_risk = math.floor(budget / per_share)
+    pos_cap = capital * a.max_position_pct / 100
+    by_pos = math.floor(pos_cap / entry)
+    by_cash = math.floor(max(available_cash, 0) / entry)
+    all_in = math.floor(capital / entry)
+    lines = [
+        f"1. Risk limit: {inr(capital, 0)} × {a.risk_per_trade_pct:g}%{mult} = {inr(budget)} you may lose if the stop "
+        f"is hit. Each share loses {inr(entry)} − {inr(stop)} = {inr(per_share)} → {inr(budget)} ÷ {inr(per_share)} "
+        f"= **{by_risk} shares**.",
+        f"2. One-stock limit: {a.max_position_pct:g}% of {inr(capital, 0)} = {inr(pos_cap, 0)} → "
+        f"{inr(pos_cap, 0)} ÷ {inr(entry)} = **{by_pos} shares**.",
+        f"3. Cash: {inr(available_cash, 0)} free → **{by_cash} shares**.",
+        f"Quantity = the smallest of the three = **{size.qty}**"
+        + (f" ({size.reason})." if size.reason else
+           f", costing {inr(size.qty * entry, 0)}, with {inr(size.risk_amount)} at risk."),
+        f"Spending all {inr(capital, 0)} would buy {all_in} shares, but a stop-out would then lose "
+        f"{inr(all_in * per_share)} ({all_in * per_share / capital * 100:.1f}% of capital) in one trade; "
+        f"the rules cap a loss at {a.risk_per_trade_pct:g}%{' × ' + format(risk_multiplier, 'g') if risk_multiplier != 1 else ''}.",
+    ]
+    return lines
+
+
 def size_signals(
     signals: list[Signal],
     capital: float,

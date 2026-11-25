@@ -130,3 +130,20 @@ def test_what_if_capital_changes_size_not_saved_capital(conn, setup_db):
     assert cfg.account.capital == 100000
     with pytest.raises(AnalyzeError, match="more than"):
         analyze_symbol(conn, cfg, "AAA", source=src, reports_dir=tmp, capital_override=-1)
+
+
+def test_quantity_for_80_rupee_stock_and_1000_capital(cfg):
+    """Manual check: ₹80 stock, stop ₹78, capital ₹1,000 (1% risk, 20% max per stock)."""
+    from swing_agent.risk import position_size, sizing_steps
+
+    # BULLISH: risk ₹10 → 10 ÷ 2 = 5 shares; one-stock cap ₹200 → 2 shares; cash → 12 shares. Qty = 2.
+    assert position_size(80, 78, 1000, 1000, cfg).qty == 2
+    steps = sizing_steps(80, 78, 1000, 1000, cfg)
+    assert "**5 shares**" in steps[0] and "**2 shares**" in steps[1] and "**12 shares**" in steps[2]
+    assert "**2**" in steps[3] and "12 shares" in steps[4]
+    # CAUTION (risk × 0.5): risk ₹5 → 2 shares; still 2.
+    assert position_size(80, 78, 1000, 1000, cfg, 0.5).qty == 2
+    assert "× 0.5 (CAUTION market)" in sizing_steps(80, 78, 1000, 1000, cfg, 0.5, "CAUTION")[0]
+    # ₹10 capital: nothing affordable within the limits.
+    assert position_size(80, 78, 10, 10, cfg).qty == 0
+    assert "too small" in sizing_steps(80, 78, 10, 10, cfg)[3]
