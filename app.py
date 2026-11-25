@@ -412,16 +412,17 @@ def page_analyze() -> None:
         if p.stop is None:
             st.caption(p.note)
         else:
-            m = st.columns(3) + st.columns(3)   # two rows so long ₹ values aren't cut off
-            if p.buy_zone:
-                m[0].metric("Buy from", inr(p.buy_zone[0]), "next day only", delta_color="off", delta_arrow="off")
-                m[1].metric("Buy up to", inr(p.buy_zone[1]), "skip if it opens above", delta_color="off", delta_arrow="off")
-            else:
-                m[0].metric("Entry", inr(p.entry))
-            m[2].metric("Stop-loss", inr(p.stop), f"-{p.stop_pct:.1f}%", delta_color="off")
-            m[3].metric("Target (2R)", inr(p.target))
-            m[4].metric("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", delta_color="off", delta_arrow="off")
-            m[5].metric("₹ at risk", inr(p.risk_amount, 0))
+            # rows of three so long ₹ values aren't cut off; no empty slots
+            cells = [("Buy from", inr(p.buy_zone[0]), "next day only", False),
+                     ("Buy up to", inr(p.buy_zone[1]), "skip if it opens above", False)] if p.buy_zone else [
+                     ("Entry (today's close)", inr(p.entry), None, False)]
+            cells += [("Stop-loss", inr(p.stop), f"-{p.stop_pct:.1f}%", True),
+                      ("Target (2R)", inr(p.target), None, False),
+                      ("Quantity", p.qty, f"needs {inr(p.qty * p.entry, 0)}", False),
+                      ("₹ at risk", inr(p.risk_amount, 0), None, False)]
+            cols = st.columns(3) + st.columns(3)
+            for col, (label, value, delta, arrow) in zip(cols, cells):
+                col.metric(label, value, delta, delta_color="off", delta_arrow="auto" if arrow else "off")
             (st.warning if cap else st.caption)(a.sizing)
             if p.qty_math:
                 with st.expander("How the quantity was worked out", expanded=True):
