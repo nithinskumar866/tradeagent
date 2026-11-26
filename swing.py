@@ -265,6 +265,16 @@ def cmd_capital(args, cfg) -> int:
     return 0
 
 
+def cmd_scan_all(args, cfg) -> int:
+    from swing_agent.market_scan import format_market_scan, scan_market
+
+    m = scan_market(cfg, capital=args.capital, download=not args.no_download,
+                    refresh_list=args.refresh_list, progress=lambda msg: print(msg, flush=True))
+    print()
+    print(format_market_scan(m, cfg))
+    return 0
+
+
 def cmd_analyze(args, cfg) -> int:
     from swing_agent import db
     from swing_agent.analyze import AnalyzeError, add_to_watchlist, analyze_symbol, format_analysis
@@ -395,6 +405,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan", help="Regime + signals + exits, print report (no download, no save)")
     s.add_argument("--date", help="Scan as of this past date (YYYY-MM-DD); default latest")
     s.set_defaults(func=cmd_scan)
+
+    s = sub.add_parser("scan-all", help="Scan every stock listed on NSE (not just the watchlist)")
+    s.add_argument("--capital", type=float, metavar="RUPEES",
+                   help="What-if: size as if your capital were this amount, all of it free")
+    s.add_argument("--no-download", action="store_true", help="Use saved prices only (offline)")
+    s.add_argument("--refresh-list", action="store_true", help="Download the latest NSE stock list first")
+    s.set_defaults(func=cmd_scan_all)
 
     s = sub.add_parser("run", help="update + scan + save report (used by the scheduler)")
     s.add_argument("--no-update", action="store_true", help="Skip the download step")

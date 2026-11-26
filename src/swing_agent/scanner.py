@@ -325,7 +325,7 @@ def rank_and_select(
     for s in ranked:
         if s.symbol in held:
             s.status, s.status_note = "WATCH", "already held"
-        elif sectors.get(s.sector, 0) >= max_per_sector:
+        elif s.sector != "Unknown" and sectors.get(s.sector, 0) >= max_per_sector:
             s.status, s.status_note = "WATCH", f"sector limit ({max_per_sector}) reached for {s.sector}"
         elif taken >= free:
             s.status, s.status_note = "WATCH", "no free position slot"

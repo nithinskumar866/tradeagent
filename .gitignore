@@ -10,3 +10,6 @@ reports/
 *.bak
 .playwright-mcp/
 data/.earnings_fetched
+data/nse_all.db
+data/nse_all.db-*
+data/watchlists/nse_all.csv
