@@ -1,5 +1,5 @@
 account:
-  capital: 100000            # INR
+  capital: 10000            # INR
   risk_per_trade_pct: 1.0    # % of capital risked per trade
   max_open_positions: 5
   max_position_pct: 20       # max % of capital in one stock
@@ -7,7 +7,7 @@ account:
 
 universe:
   watchlist_file: data/watchlists/nifty100.csv
-  min_price: 100             # INR
+  min_price: 0               # INR (0 = no minimum share price)
   min_avg_traded_value_cr: 20  # 20-day avg (close*volume) in crore INR
   min_history_bars: 250
 
