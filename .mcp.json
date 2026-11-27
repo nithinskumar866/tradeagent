@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "contextbaton": {
+      "command": "node",
+      "args": ["D:/nithin.s works/repo/cli mcp/dist/cli.js", "mcp"]
+    }
+  }
+}
